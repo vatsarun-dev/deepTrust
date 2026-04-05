@@ -7,7 +7,6 @@ function Hero() {
   const sectionRef = useRef(null);
   const backdropRef = useRef(null);
   const introRef = useRef(null);
-  const contentRef = useRef(null);
 
   useEffect(() => {
     const isMobile = window.matchMedia("(max-width: 767px)").matches;
@@ -33,23 +32,12 @@ function Hero() {
           introRef.current.children,
           { y: 0, opacity: 1 },
           {
-            y: isMobile ? -26 : -44,
-            opacity: 0,
-            stagger: 0.08,
+            y: isMobile ? -14 : -24,
+            opacity: 1,
+            stagger: 0.06,
             ease: "power2.out",
           },
-          0.2,
-        )
-        .fromTo(
-          contentRef.current.children,
-          { y: 80, opacity: 0 },
-          {
-            y: 0,
-            opacity: 1,
-            stagger: 0.12,
-            duration: 0.95,
-          },
-          0.72,
+          0.08,
         );
     }, sectionRef);
 
@@ -73,7 +61,7 @@ function Hero() {
 
       <div
         ref={introRef}
-        className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center px-4 md:px-8"
+        className="absolute inset-0 z-20 flex items-center justify-center px-4 md:px-8"
       >
         <div className="max-w-4xl text-center">
           <p className="mb-5 text-[0.72rem] uppercase tracking-[0.5em] text-white/68">
@@ -85,25 +73,6 @@ function Hero() {
           <p className="mx-auto mt-6 max-w-2xl text-sm leading-7 text-white/65 md:text-base">
             DeepTrust helps people inspect suspicious narratives and synthetic
             media before they harden into public belief.
-          </p>
-        </div>
-      </div>
-
-      <div
-        ref={contentRef}
-        className="absolute inset-0 z-20 flex items-center justify-center px-4 pt-36 md:px-8 md:pt-40"
-      >
-        <div className="mx-auto flex w-full max-w-5xl flex-col items-center gap-6 text-center">
-          <p className="max-w-xs text-[0.7rem] uppercase tracking-[0.45em] text-white/75">
-            Detect narrative manipulation before it rewires public trust.
-          </p>
-          <h1 className="max-w-4xl text-4xl font-bold uppercase leading-[0.9] text-white md:text-6xl lg:text-[4.75rem]">
-            Truth needs a cinematic defense system.
-          </h1>
-          <p className="max-w-2xl text-base leading-7 text-white/72 md:text-lg">
-            DeepTrust verifies suspicious headlines, images, and media patterns
-            with an AI-guided flow built for people moving through noise at
-            speed.
           </p>
           <div className="flex flex-col gap-3 sm:flex-row">
             <Link to="/check" className="dt-button">
