@@ -1,0 +1,97 @@
+@import url("https://fonts.googleapis.com/css2?family=Syne:wght@400;500;600;700;800&family=Outfit:wght@300;400;500;600;700&display=swap");
+@import "tailwindcss";
+
+:root {
+  --bg: #050505;
+  --accent: #ff3b3b;
+  --text-strong: rgba(255, 255, 255, 0.92);
+  --text-soft: rgba(255, 255, 255, 0.6);
+}
+
+html {
+  background: var(--bg);
+  scroll-behavior: auto;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text-strong);
+  font-family: "Outfit", "Segoe UI", sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+button,
+input,
+textarea {
+  font: inherit;
+}
+
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+  font-family: "Syne", "Segoe UI", sans-serif;
+}
+
+.dt-section {
+  margin: 0 auto;
+  max-width: 88rem;
+  padding: 5rem 1rem;
+}
+
+.dt-button,
+.dt-button-muted {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  padding: 0.95rem 1.5rem;
+  text-transform: uppercase;
+  letter-spacing: 0.18em;
+  font-size: 0.8rem;
+  transition:
+    transform 220ms ease,
+    background-color 220ms ease,
+    border-color 220ms ease,
+    color 220ms ease;
+}
+
+.dt-button {
+  background: var(--accent);
+  color: white;
+}
+
+.dt-button-muted {
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.04);
+  color: rgba(255, 255, 255, 0.8);
+}
+
+.dt-button:hover,
+.dt-button-muted:hover {
+  transform: scale(1.05);
+}
+
+@media (min-width: 768px) {
+  .dt-section {
+    padding: 7rem 2rem;
+  }
+}
+
+@media (max-width: 767px) {
+  .dt-button,
+  .dt-button-muted {
+    width: 100%;
+  }
+}
