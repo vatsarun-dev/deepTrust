@@ -38,7 +38,7 @@ function Hero() {
             stagger: 0.08,
             ease: "power2.out",
           },
-          0.32,
+          0.2,
         )
         .fromTo(
           contentRef.current.children,
@@ -47,9 +47,9 @@ function Hero() {
             y: 0,
             opacity: 1,
             stagger: 0.12,
-            duration: 1.15,
+            duration: 0.95,
           },
-          0.52,
+          0.72,
         );
     }, sectionRef);
 
@@ -59,7 +59,7 @@ function Hero() {
   return (
     <section
       ref={sectionRef}
-      className="relative flex min-h-screen items-end overflow-hidden px-4 pb-16 pt-28 md:px-8 md:pb-20"
+      className="relative flex min-h-[135vh] items-end overflow-hidden px-4 pb-16 pt-28 md:min-h-[150vh] md:px-8 md:pb-20"
     >
       <div ref={backdropRef} className="absolute inset-0">
         <img
@@ -80,26 +80,24 @@ function Hero() {
             AI Fake News And Media Verification Platform
           </p>
           <h2 className="mx-auto max-w-4xl text-3xl font-semibold uppercase leading-[1.02] text-white md:text-5xl lg:text-6xl">
-            Every manipulated story begins by occupying attention before truth
-            has time to speak.
+            Manipulated stories move first. Truth needs time to answer back.
           </h2>
           <p className="mx-auto mt-6 max-w-2xl text-sm leading-7 text-white/65 md:text-base">
-            DeepTrust tracks suspicious narratives, synthetic media, and
-            coordinated misinformation so people can verify what they are seeing
-            before it shapes public belief.
+            DeepTrust helps people inspect suspicious narratives and synthetic
+            media before they harden into public belief.
           </p>
         </div>
       </div>
 
       <div
         ref={contentRef}
-        className="absolute inset-x-0 bottom-16 z-20 px-4 md:bottom-20 md:px-8"
+        className="absolute inset-0 z-20 flex items-center justify-center px-4 pt-36 md:px-8 md:pt-40"
       >
-        <div className="mx-auto flex w-full max-w-7xl flex-col gap-6">
+        <div className="mx-auto flex w-full max-w-5xl flex-col items-center gap-6 text-center">
           <p className="max-w-xs text-[0.7rem] uppercase tracking-[0.45em] text-white/75">
             Detect narrative manipulation before it rewires public trust.
           </p>
-          <h1 className="max-w-4xl text-5xl font-bold uppercase leading-[0.9] text-white md:text-1xl lg:text-[4rem]">
+          <h1 className="max-w-4xl text-4xl font-bold uppercase leading-[0.9] text-white md:text-6xl lg:text-[4.75rem]">
             Truth needs a cinematic defense system.
           </h1>
           <p className="max-w-2xl text-base leading-7 text-white/72 md:text-lg">
