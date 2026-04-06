@@ -3,17 +3,156 @@ import { useForm } from "react-hook-form";
 import { gsap } from "gsap";
 import { useAppContext } from "../context/AppContext.jsx";
 
+const API_BASE_URL = import.meta.env.VITE_API_URL || "";
+
+function formatModelSource(source) {
+  if (!source) return null;
+  if (source === "puter-js") return "Puter.js (GPT-5.4 Nano)";
+  if (source === "puter-js+gnews") return "Puter.js + GNews evidence";
+  if (source === "gnews") return "GNews evidence analysis";
+  if (source === "sightengine") return "Sightengine image forensics";
+  if (source === "fallback") return "Local fallback analysis";
+  return source;
+}
+
+function extractTextSourceLinks(sources) {
+  if (Array.isArray(sources)) {
+    return sources;
+  }
+  if (sources && Array.isArray(sources.text)) {
+    return sources.text;
+  }
+  return [];
+}
+
+function mapStatusToResult(status) {
+  if (status === "True" || status === "Likely True") return "Real";
+  if (status === "Unverified") return null;
+  return "Fake";
+}
+
+function toVerdictLabel(status, result) {
+  if (status === "Unverified") return "Unverified";
+  if (result === "Fake" || status === "Fake" || status === "Misleading") {
+    return "High manipulation risk";
+  }
+  return "Likely authentic";
+}
+
+function normalizeStatus(rawStatus) {
+  const status = String(rawStatus || "").trim().toLowerCase();
+  if (status === "true") return "True";
+  if (status === "likely true") return "Likely True";
+  if (status === "misleading") return "Misleading";
+  if (status === "fake" || status === "false" || status === "likely false") return "Fake";
+  if (status === "unverified") return "Unverified";
+  return "Unverified";
+}
+
+function clampConfidence(value, fallback = 50) {
+  const num = Number(value);
+  if (!Number.isFinite(num)) return fallback;
+  return Math.max(0, Math.min(100, Math.round(num)));
+}
+
+function extractPuterText(raw) {
+  if (typeof raw === "string") return raw;
+  if (typeof raw?.text === "string") return raw.text;
+  if (typeof raw?.message?.content === "string") return raw.message.content;
+  if (Array.isArray(raw?.message?.content)) {
+    return raw.message.content
+      .map((part) => (typeof part?.text === "string" ? part.text : ""))
+      .join("")
+      .trim();
+  }
+  return String(raw || "");
+}
+
+function parsePuterJson(rawContent) {
+  const normalized = String(rawContent || "")
+    .replace(/^```json\s*/i, "")
+    .replace(/^```\s*/i, "")
+    .replace(/\s*```$/i, "")
+    .trim();
+
+  const start = normalized.indexOf("{");
+  const end = normalized.lastIndexOf("}");
+  const candidate =
+    start !== -1 && end !== -1 && end > start
+      ? normalized.slice(start, end + 1)
+      : normalized;
+
+  return JSON.parse(candidate);
+}
+
+function buildPuterPrompt(claim, articles) {
+  const articleBlock = articles.length
+    ? articles
+        .slice(0, 3)
+        .map(
+          (article, index) =>
+            `${index + 1}. ${(article.title || "Untitled").trim()} + ${(article.description || "No description").trim()}`
+        )
+        .join("\n")
+    : "No relevant news articles were found.";
+
+  return [
+    "User Claim:",
+    `"${claim}"`,
+    "",
+    "Relevant News Articles:",
+    "",
+    articleBlock,
+    "",
+    "Instructions:",
+    "* Analyze the claim based ONLY on the provided news articles",
+    "* Do NOT assume facts beyond given data",
+    '* If no strong evidence exists -> return "Unverified"',
+    "",
+    "Return STRICT JSON:",
+    "{",
+    '"status": "True / Likely True / Misleading / Fake / Unverified",',
+    '"confidence": number (0-100),',
+    '"explanation": "clear reasoning based on news evidence"',
+    "}",
+  ].join("\n");
+}
+
+async function analyzeTextWithPuter(claim, sources) {
+  const puterClient = window?.puter;
+  if (!puterClient?.ai?.chat) {
+    throw new Error("Puter SDK is not available");
+  }
+
+  const prompt = buildPuterPrompt(claim, sources);
+  const raw = await puterClient.ai.chat(prompt, { model: "gpt-5.4-nano" });
+  const rawText = extractPuterText(raw);
+  const parsed = parsePuterJson(rawText);
+
+  const status = normalizeStatus(parsed?.status);
+  return {
+    status,
+    result: mapStatusToResult(status),
+    confidence: clampConfidence(parsed?.confidence, 55),
+    explanation:
+      String(parsed?.explanation || "").trim() ||
+      "Client-side AI could not provide a full explanation from the available evidence.",
+  };
+}
+
 function CheckSection() {
   const sectionRef = useRef(null);
   const [localLoading, setLocalLoading] = useState(false);
-  const [requestPayload, setRequestPayload] = useState(null);
+  const [apiError, setApiError] = useState("");
   const { analysisResult, setAnalysisResult, setLoading } = useAppContext();
   const {
     register,
     handleSubmit,
     reset,
+    watch,
     formState: { errors },
   } = useForm();
+  const imageFiles = watch("image");
 
   useEffect(() => {
     const context = gsap.context(() => {
@@ -36,41 +175,94 @@ function CheckSection() {
     return () => context.revert();
   }, []);
 
-  useEffect(() => {
-    if (!requestPayload) {
-      return undefined;
-    }
-
+  const onSubmit = async (data) => {
+    setApiError("");
     setLocalLoading(true);
     setLoading(true);
 
-    const timer = window.setTimeout(() => {
-      const intensity = requestPayload.text.length % 100;
-      const confidence = Math.max(67, Math.min(96, 72 + intensity / 4));
+    try {
+      const hasText = Boolean(data.text?.trim());
+      const hasImage = Boolean(data.image?.[0]);
+      const formData = new FormData();
+
+      if (hasText) {
+        formData.append("text", data.text.trim());
+      }
+      if (hasImage) {
+        formData.append("image", data.image[0]);
+      }
+
+      const response = await fetch(`${API_BASE_URL}/api/analyze`, {
+        method: "POST",
+        body: formData,
+      });
+
+      const responseData = await response.json();
+      if (!response.ok) {
+        throw new Error(responseData.message || "Analysis request failed.");
+      }
+
+      const sourceLinks = extractTextSourceLinks(responseData.sources);
+      let finalStatus = responseData.status || "Unverified";
+      let finalResult = responseData.result ?? mapStatusToResult(finalStatus);
+      let finalConfidence = clampConfidence(responseData.confidence, 50);
+      let finalExplanation =
+        String(responseData.explanation || "").trim() || "Unable to build an explanation from backend response.";
+      let finalSource = responseData.source || null;
+      let puterNote = null;
+
+      if (hasText) {
+        try {
+          const puterResult = await analyzeTextWithPuter(data.text.trim(), sourceLinks);
+
+          if (!hasImage) {
+            finalStatus = puterResult.status;
+            finalResult = puterResult.result;
+            finalConfidence = puterResult.confidence;
+            finalExplanation = puterResult.explanation;
+          } else {
+            puterNote = `Client text reasoning (Puter.js): ${puterResult.explanation}`;
+          }
+
+          finalSource = hasImage ? `${responseData.source || "backend"} + puter-js` : "puter-js+gnews";
+        } catch (puterError) {
+          puterNote = `Client AI reasoning unavailable: ${puterError.message}`;
+        }
+      }
+
+      const sourceSummary = {
+        text: sourceLinks.length ? `${sourceLinks.length} linked article(s)` : "n/a",
+        image: hasImage ? responseData.source || "sightengine" : "n/a",
+      };
 
       setAnalysisResult({
-        verdict: confidence > 84 ? "High manipulation risk" : "Needs deeper review",
-        confidence: Math.round(confidence),
-        summary:
-          "Language volatility, framing density, and media context suggest coordinated amplification patterns.",
+        verdict: toVerdictLabel(finalStatus, finalResult),
+        confidence: finalConfidence,
+        summary: finalExplanation,
+        source: finalSource,
+        sources: sourceSummary,
+        sourceLinks,
         evidence: [
-          "Emotionally charged phrasing spikes beyond neutral reporting norms.",
-          "Narrative framing clusters around urgency and blame assignment.",
-          requestPayload.image?.[0]
-            ? "Uploaded media may require forensic inspection for synthetic edits."
-            : "No image attached, so visual forensics were skipped.",
+          hasText
+            ? "Text analysis completed using GNews evidence + Puter.js reasoning."
+            : "No text was provided, so language analysis was skipped.",
+          hasImage
+            ? "Image inspection completed using backend media forensics."
+            : "No image was uploaded, so media forensics were skipped.",
+          `Backend status: ${responseData.status || "n/a"} with ${clampConfidence(responseData.confidence, 0)}% confidence.`,
+          puterNote,
+          finalSource ? `Primary model source: ${formatModelSource(finalSource)}.` : null,
         ],
       });
+
+      reset();
+    } catch (error) {
+      setApiError(error.message || "Unable to analyze content right now.");
+      setAnalysisResult(null);
+    } finally {
       setLocalLoading(false);
       setLoading(false);
-      reset();
-    }, 1600);
-
-    return () => window.clearTimeout(timer);
-  }, [requestPayload, reset, setAnalysisResult, setLoading]);
-
-  const onSubmit = (data) => {
-    setRequestPayload(data);
+    }
   };
 
   return (
@@ -84,9 +276,8 @@ function CheckSection() {
             Check suspicious text or media before it spreads.
           </h2>
           <p className="check-fade max-w-xl text-base leading-8 text-white/65">
-            Submit a headline, post copy, or upload a suspicious image. The
-            response flow simulates an AI verification engine and feeds the
-            result into shared app state.
+            Text verification now uses GNews evidence from the backend plus client-side
+            reasoning with Puter.js. Image forensics still run through the backend.
           </p>
         </div>
 
@@ -103,10 +294,19 @@ function CheckSection() {
               className="mb-4 w-full rounded-[1.5rem] border border-white/10 bg-black/30 px-4 py-4 text-white outline-none placeholder:text-white/25 focus:border-[var(--accent)]/55"
               placeholder="Paste the headline, caption, or excerpt you want DeepTrust to inspect..."
               {...register("text", {
-                required: "Text is required for analysis.",
-                minLength: {
-                  value: 24,
-                  message: "Add a little more context so the detector has signal.",
+                validate: (value) => {
+                  const hasText = Boolean(value?.trim());
+                  const hasImage = Boolean(imageFiles?.length);
+
+                  if (!hasText && !hasImage) {
+                    return "Add suspicious text or upload an image to analyze.";
+                  }
+
+                  if (hasText && value.trim().length < 24) {
+                    return "Add a little more context so the detector has signal.";
+                  }
+
+                  return true;
                 },
               })}
             />
@@ -121,8 +321,25 @@ function CheckSection() {
               type="file"
               accept="image/*"
               className="mb-6 block w-full rounded-[1rem] border border-dashed border-white/15 bg-black/25 px-4 py-4 text-sm text-white/60 file:mr-4 file:rounded-full file:border-0 file:bg-[var(--accent)] file:px-4 file:py-2 file:text-white"
-              {...register("image")}
+              {...register("image", {
+                validate: (files) => {
+                  const hasText = Boolean(watch("text")?.trim());
+                  const hasImage = Boolean(files?.length);
+
+                  if (!hasText && !hasImage) {
+                    return "Add suspicious text or upload an image to analyze.";
+                  }
+
+                  return true;
+                },
+              })}
             />
+            {errors.image ? (
+              <p className="mb-4 text-sm text-[var(--accent)]">{errors.image.message}</p>
+            ) : null}
+            {apiError ? (
+              <p className="mb-4 text-sm text-[var(--accent)]">{apiError}</p>
+            ) : null}
 
             <button type="submit" className="dt-button w-full">
               {localLoading ? "Analyzing Signal..." : "Start Analysis"}
@@ -147,11 +364,41 @@ function CheckSection() {
                     {analysisResult.confidence}%
                   </p>
                 </div>
-                <p className="text-sm leading-7 text-white/68">
-                  {analysisResult.summary}
-                </p>
+                {analysisResult.source ? (
+                  <div>
+                    <p className="text-sm text-white/45">Analysis Source</p>
+                    <p className="text-sm uppercase tracking-[0.24em] text-white/72">
+                      {formatModelSource(analysisResult.source)}
+                    </p>
+                  </div>
+                ) : null}
+                {analysisResult.sources ? (
+                  <div>
+                    <p className="text-sm text-white/45">Analysis Sources</p>
+                    <p className="text-sm uppercase tracking-[0.24em] text-white/72">
+                      Text: {analysisResult.sources.text || "n/a"} | Image:{" "}
+                      {analysisResult.sources.image || "n/a"}
+                    </p>
+                  </div>
+                ) : null}
+                {analysisResult.sourceLinks?.length ? (
+                  <div className="space-y-2">
+                    {analysisResult.sourceLinks.map((link) => (
+                      <a
+                        key={link.url}
+                        href={link.url}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="block rounded-[1rem] border border-white/10 bg-black/20 px-3 py-2 text-xs text-white/75 underline-offset-2 hover:underline"
+                      >
+                        {link.title || link.url}
+                      </a>
+                    ))}
+                  </div>
+                ) : null}
+                <p className="text-sm leading-7 text-white/68">{analysisResult.summary}</p>
                 <div className="space-y-3">
-                  {analysisResult.evidence.map((item) => (
+                  {analysisResult.evidence.filter(Boolean).map((item) => (
                     <div
                       key={item}
                       className="rounded-[1.25rem] border border-white/10 bg-black/20 px-4 py-3 text-sm leading-6 text-white/68"
@@ -165,7 +412,7 @@ function CheckSection() {
               <div className="flex h-full min-h-[300px] items-end rounded-[1.5rem] bg-[radial-gradient(circle_at_top,_rgba(255,59,59,0.22),_transparent_30%),linear-gradient(180deg,_rgba(255,255,255,0.02),_rgba(255,255,255,0.01))] p-5">
                 <p className="max-w-xs text-sm leading-7 text-white/55">
                   Your analysis result appears here with a confidence score,
-                  summary, and evidence trail once the simulated API finishes.
+                  summary, and evidence trail once the live analysis finishes.
                 </p>
               </div>
             )}

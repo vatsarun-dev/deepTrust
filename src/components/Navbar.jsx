@@ -11,7 +11,12 @@ const navItems = [
 
 function Navbar() {
   const [menuOpen, setMenuOpen] = useState(false);
-  const { loading, user } = useAppContext();
+  const { loading, user, setUser } = useAppContext();
+
+  const handleLogout = () => {
+    setUser(null);
+    setMenuOpen(false);
+  };
 
   return (
     <header className="fixed inset-x-0 top-0 z-50 px-4 py-4 md:px-8">
@@ -43,8 +48,17 @@ function Navbar() {
 
         <div className="hidden items-center gap-3 md:flex">
           <div className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-xs uppercase tracking-[0.22em] text-white/55">
-            {loading ? "Analyzing" : user ? user.name : "Guest Mode"}
+            {loading ? "Analyzing" : user ? `Hey ${user.name}` : "Guest Mode"}
           </div>
+          {user ? (
+            <button
+              type="button"
+              className="rounded-full border border-white/10 bg-white/5 px-4 py-2 text-xs uppercase tracking-[0.22em] text-white/55 transition hover:bg-white/10 hover:text-white"
+              onClick={handleLogout}
+            >
+              Logout
+            </button>
+          ) : null}
         </div>
 
         <button
@@ -60,6 +74,11 @@ function Navbar() {
       {menuOpen ? (
         <div className="mx-auto mt-3 max-w-7xl rounded-[2rem] border border-white/10 bg-[#0a0a0a]/95 p-4 backdrop-blur-xl md:hidden">
           <div className="flex flex-col gap-2">
+            {user ? (
+              <button type="button" onClick={handleLogout} className="dt-button-muted">
+                Logout
+              </button>
+            ) : null}
             {navItems.map((item) => (
               <NavLink
                 key={item.href}
