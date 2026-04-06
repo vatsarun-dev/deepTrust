@@ -1,6 +1,6 @@
 const fs = require("fs/promises");
-const { analyzeFakeNews } = require("../services/fakeNewsService");
-const { analyzeImage } = require("../services/imageDetectionService");
+const { analyzeWithMultipleSources } = require("../services/enhancedFakeNewsService");
+const { analyzeImage } = require("../services/enhancedImageDetectionService");
 
 function mergeResults(textResult, imageResult) {
   const availableResults = [textResult, imageResult].filter(Boolean);
@@ -72,7 +72,7 @@ async function analyzeContent(req, res, next) {
     }
 
     const [textResult, imageResult] = await Promise.all([
-      analyzeFakeNews(text),
+      analyzeWithMultipleSources(text),
       analyzeImage(uploadedFilePath),
     ]);
 

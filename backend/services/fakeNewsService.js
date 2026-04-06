@@ -1,4 +1,9 @@
 const { fetchRelevantNews } = require("./gnewsService");
+const {
+  analyzeWithAI,
+  mapVerdictToStatus,
+  mapVerdictToResult,
+} = require("./aiService");
 
 const STOP_WORDS = new Set([
   "this",
@@ -94,7 +99,9 @@ function classifyArticleVerdict(article) {
 function mapSources(articles) {
   return articles.slice(0, 3).map((article) => ({
     title: String(article?.title || "").trim(),
+    description: String(article?.description || "").trim(),
     url: String(article?.url || "").trim(),
+    source: String(article?.source || article?.source?.name || "").trim(),
   }));
 }
 
@@ -175,31 +182,82 @@ async function analyzeFakeNews(text) {
     return null;
   }
 
+  console.log(`\n${'='.repeat(70)}`);
+  console.log(`[ANALYSIS] Processing claim: "${normalizedText}"`);
+  console.log('='.repeat(70));
+
+  // Step 1: Fetch from GNews
   let articles = [];
   try {
+    console.log(`\n[GNEWS] Fetching articles...`);
     articles = await fetchRelevantNews(normalizedText);
+    
+    console.log(`\n[GNEWS] ✅ Found ${articles.length} articles\n`);
+    
+    if (articles.length > 0) {
+      console.log('📰 ARTICLES FROM GNEWS:');
+      console.log('─'.repeat(70));
+      articles.forEach((article, idx) => {
+        console.log(`\n${idx + 1}. TITLE: ${article.title}`);
+        console.log(`   SOURCE: ${article.source}`);
+        console.log(`   DESCRIPTION: ${article.description}`);
+        console.log(`   URL: ${article.url}`);
+      });
+      console.log('\n' + '─'.repeat(70));
+    } else {
+      console.log(`\n⚠️  No articles found from GNews`);
+    }
   } catch (error) {
-    console.warn(`GNews fetch failed, continuing with unverified fallback: ${error.message}`);
+    console.warn(`\n[GNEWS] ❌ Failed: ${error.message}`);
     articles = [];
   }
 
-  debugLog(
-    `[DEBUG][TEXT] GNews top articles: ${JSON.stringify(
-      articles.slice(0, 3).map((article) => ({
-        title: article.title,
-        url: article.url,
-      }))
-    )}`
-  );
-
-  if (!articles.length) {
-    return buildUnverifiedResult(
-      [],
-      "No relevant GNews articles were found for this claim."
-    );
+  // Step 2: Use AI to analyze
+  let aiAnalysis = null;
+  try {
+    console.log(`\n[AI] Analyzing with AI...`);
+    aiAnalysis = await analyzeWithAI(normalizedText, articles.slice(0, 3));
+    console.log(`[AI] ✅ Verdict: ${aiAnalysis?.verdict}, Confidence: ${aiAnalysis?.confidence}%`);
+  } catch (error) {
+    console.error(`\n[AI] ❌ Failed: ${error.message}`);
   }
 
-  return scoreFromGNews(normalizedText, articles.slice(0, 3));
+  // Step 3: Return result
+  if (aiAnalysis) {
+    let fakePercentage;
+    if (aiAnalysis.verdict === "TRUE") {
+      fakePercentage = 100 - aiAnalysis.confidence;
+    } else if (aiAnalysis.verdict === "FALSE") {
+      fakePercentage = aiAnalysis.confidence;
+    } else if (aiAnalysis.verdict === "MISLEADING") {
+      fakePercentage = Math.max(60, aiAnalysis.confidence);
+    } else {
+      fakePercentage = 50;
+    }
+    
+    console.log(`\n[RESULT] Fake %: ${fakePercentage}% (${aiAnalysis.verdict})`);
+    console.log('='.repeat(70) + '\n');
+    
+    return {
+      status: mapVerdictToStatus(aiAnalysis.verdict, aiAnalysis.confidence),
+      result: mapVerdictToResult(aiAnalysis.verdict),
+      confidence: fakePercentage,
+      explanation: aiAnalysis.reasoning,
+      source_match: articles.length >= 2 ? "strong" : articles.length === 1 ? "weak" : "none",
+      sources: mapSources(articles),
+      source: articles.length > 0 ? "ai+gnews" : "ai",
+      articles_found: articles.length,
+      ai_analysis: {
+        key_facts: aiAnalysis.keyFacts,
+        red_flags: aiAnalysis.redFlags,
+        sources_assessment: aiAnalysis.sourcesAssessment,
+      },
+    };
+  }
+
+  console.log(`\n[FALLBACK] AI unavailable`);
+  console.log('='.repeat(70) + '\n');
+  return buildUnverifiedResult([], "AI analysis unavailable.");
 }
 
 module.exports = {
