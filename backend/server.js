@@ -9,7 +9,7 @@ const authRoutes = require("./routes/authRoutes");
 const imageRoutes = require("./routes/imageRoutes");
 const { notFound, errorHandler } = require("./middleware/errorMiddleware");
 
-dotenv.config();
+dotenv.config({ path: path.join(__dirname, ".env"), override: true });
 connectDB();
 
 const app = express();

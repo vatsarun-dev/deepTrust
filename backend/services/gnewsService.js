@@ -3,6 +3,14 @@ const MAX_ARTICLES = 3;
 const REQUEST_TIMEOUT_MS = 10000;
 let lastGnewsWarningAt = 0;
 
+const gnewsAvailability = {
+  available: true,
+  reason: null,
+  status: null,
+  blockedUntil: null,
+  message: null,
+};
+
 function isDebugEnabled() {
   return process.env.DEBUG_ANALYSIS === "true";
 }
@@ -11,6 +19,78 @@ function debugLog(message) {
   if (isDebugEnabled()) {
     console.log(message);
   }
+}
+
+function nextUtcMidnightTimestamp() {
+  const now = new Date();
+  const next = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1, 0, 0, 0, 0);
+  return next;
+}
+
+function formatUtcTimestamp(timestamp) {
+  if (!timestamp || !Number.isFinite(timestamp)) {
+    return null;
+  }
+
+  return new Date(timestamp).toISOString().replace(".000Z", "Z");
+}
+
+function setAvailabilityState(nextState) {
+  gnewsAvailability.available = nextState.available;
+  gnewsAvailability.reason = nextState.reason || null;
+  gnewsAvailability.status = nextState.status || null;
+  gnewsAvailability.blockedUntil = nextState.blockedUntil || null;
+  gnewsAvailability.message = nextState.message || null;
+}
+
+function isQuotaBlockedNow() {
+  return (
+    gnewsAvailability.reason === "quota_exhausted" &&
+    Number.isFinite(gnewsAvailability.blockedUntil) &&
+    Date.now() < gnewsAvailability.blockedUntil
+  );
+}
+
+function clearExpiredQuotaState() {
+  if (
+    gnewsAvailability.reason === "quota_exhausted" &&
+    Number.isFinite(gnewsAvailability.blockedUntil) &&
+    Date.now() >= gnewsAvailability.blockedUntil
+  ) {
+    setAvailabilityState({
+      available: true,
+      reason: null,
+      status: null,
+      blockedUntil: null,
+      message: null,
+    });
+  }
+}
+
+function isQuotaLimitError(status, errorText) {
+  if (status !== 403) {
+    return false;
+  }
+
+  const details = String(errorText || "").toLowerCase();
+  return (
+    details.includes("request limit") ||
+    details.includes("next reset") ||
+    details.includes("change-plan")
+  );
+}
+
+function getGNewsAvailabilityStatus() {
+  clearExpiredQuotaState();
+  const blockedUntilIso = formatUtcTimestamp(gnewsAvailability.blockedUntil);
+  return {
+    available: gnewsAvailability.available,
+    reason: gnewsAvailability.reason,
+    status: gnewsAvailability.status,
+    blockedUntil: blockedUntilIso,
+    quotaBlocked: isQuotaBlockedNow(),
+    message: gnewsAvailability.message,
+  };
 }
 
 function normalizeQuery(query) {
@@ -117,6 +197,8 @@ async function requestGNews(searchQuery, apiKey, controller) {
 }
 
 async function fetchRelevantNews(query) {
+  clearExpiredQuotaState();
+
   const normalizedQuery = normalizeQuery(query);
 
   if (!normalizedQuery) {
@@ -125,6 +207,22 @@ async function fetchRelevantNews(query) {
 
   const apiKey = process.env.GNEWS_API_KEY;
   if (!apiKey) {
+    setAvailabilityState({
+      available: false,
+      reason: "missing_api_key",
+      status: null,
+      blockedUntil: null,
+      message: "GNEWS_API_KEY is not configured.",
+    });
+    return [];
+  }
+
+  if (isQuotaBlockedNow()) {
+    debugLog(
+      `[DEBUG][GNEWS] Quota cache active until ${formatUtcTimestamp(
+        gnewsAvailability.blockedUntil
+      )}. Skipping outbound request.`
+    );
     return [];
   }
 
@@ -153,6 +251,26 @@ async function fetchRelevantNews(query) {
           continue;
         }
 
+        if (isQuotaLimitError(response.status, errorText)) {
+          const blockedUntil = nextUtcMidnightTimestamp();
+          setAvailabilityState({
+            available: false,
+            reason: "quota_exhausted",
+            status: response.status,
+            blockedUntil,
+            message:
+              "GNews daily request limit reached. Retry after the next UTC reset or upgrade the plan.",
+          });
+        } else {
+          setAvailabilityState({
+            available: false,
+            reason: `http_${response.status}`,
+            status: response.status,
+            blockedUntil: null,
+            message: `GNews returned HTTP ${response.status}.`,
+          });
+        }
+
         const now = Date.now();
         if (now - lastGnewsWarningAt > 60 * 1000) {
           lastGnewsWarningAt = now;
@@ -164,6 +282,14 @@ async function fetchRelevantNews(query) {
       }
 
       const data = await response.json();
+      setAvailabilityState({
+        available: true,
+        reason: null,
+        status: response.status,
+        blockedUntil: null,
+        message: null,
+      });
+
       const rawCount = Array.isArray(data?.articles) ? data.articles.length : 0;
       debugLog(`[DEBUG][GNEWS] Query "${searchQuery}" returned ${rawCount} raw article(s).`);
 
@@ -192,6 +318,14 @@ async function fetchRelevantNews(query) {
 
     return merged;
   } catch (error) {
+    setAvailabilityState({
+      available: false,
+      reason: error?.name === "AbortError" ? "timeout" : "request_failed",
+      status: null,
+      blockedUntil: null,
+      message: error.message,
+    });
+
     const now = Date.now();
     if (now - lastGnewsWarningAt > 60 * 1000) {
       lastGnewsWarningAt = now;
@@ -205,4 +339,5 @@ async function fetchRelevantNews(query) {
 
 module.exports = {
   fetchRelevantNews,
+  getGNewsAvailabilityStatus,
 };

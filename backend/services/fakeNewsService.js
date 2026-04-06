@@ -1,4 +1,4 @@
-const { fetchRelevantNews } = require("./gnewsService");
+const { fetchRelevantNews, getGNewsAvailabilityStatus } = require("./gnewsService");
 
 const STOP_WORDS = new Set([
   "this",
@@ -98,15 +98,15 @@ function mapSources(articles) {
   }));
 }
 
-function buildUnverifiedResult(articles, explanation) {
+function buildUnverifiedResult(articles, explanation, confidence = 45, source = "gnews") {
   return {
     status: "Unverified",
     result: null,
-    confidence: 45,
+    confidence,
     explanation,
     source_match: "none",
     sources: mapSources(articles),
-    source: "gnews",
+    source,
   };
 }
 
@@ -183,6 +183,9 @@ async function analyzeFakeNews(text) {
     articles = [];
   }
 
+  const gnewsAvailability = getGNewsAvailabilityStatus();
+  debugLog(`[DEBUG][GNEWS] Availability: ${JSON.stringify(gnewsAvailability)}`);
+
   debugLog(
     `[DEBUG][TEXT] GNews top articles: ${JSON.stringify(
       articles.slice(0, 3).map((article) => ({
@@ -193,10 +196,26 @@ async function analyzeFakeNews(text) {
   );
 
   if (!articles.length) {
-    return buildUnverifiedResult(
-      [],
-      "No relevant GNews articles were found for this claim."
-    );
+    if (gnewsAvailability.reason === "quota_exhausted" && gnewsAvailability.quotaBlocked) {
+      const resetAt = gnewsAvailability.blockedUntil || "next reset at 00:00 UTC";
+      return buildUnverifiedResult(
+        [],
+        `GNews daily request limit reached. Verification is temporarily unavailable until ${resetAt}.`,
+        0,
+        "gnews-quota"
+      );
+    }
+
+    if (gnewsAvailability.reason === "missing_api_key") {
+      return buildUnverifiedResult(
+        [],
+        "GNews API key is missing in backend configuration, so claim verification cannot run.",
+        0,
+        "gnews-config"
+      );
+    }
+
+    return buildUnverifiedResult([], "No relevant GNews articles were found for this claim.");
   }
 
   return scoreFromGNews(normalizedText, articles.slice(0, 3));

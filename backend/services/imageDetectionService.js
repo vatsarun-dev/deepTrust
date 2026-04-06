@@ -1,9 +1,12 @@
 const axios = require("axios");
 const FormData = require("form-data");
+const dotenv = require("dotenv");
 const fs = require("fs/promises");
 const path = require("path");
 
 const SIGHTENGINE_API_URL = "https://api.sightengine.com/1.0/check.json";
+let cachedFallbackCreds = null;
+let attemptedFallbackLoad = false;
 
 function isDebugEnabled() {
   return process.env.DEBUG_ANALYSIS === "true";
@@ -45,9 +48,56 @@ function buildDefaultExplanation(status, confidence) {
   return `This image appears likely real with ${confidence}% confidence because strong synthetic indicators were not detected.`;
 }
 
-async function callSightengine(file) {
-  const apiUser = process.env.SIGHTENGINE_API_USER;
-  const apiSecret = process.env.SIGHTENGINE_API_SECRET;
+function normalizeCredential(value) {
+  return String(value || "")
+    .trim()
+    .replace(/^['"]+|['"]+$/g, "");
+}
+
+function isUsableCredential(value) {
+  const normalized = normalizeCredential(value);
+  if (!normalized) return false;
+  return !/^your_/i.test(normalized);
+}
+
+function areSameCredentials(a, b) {
+  return (
+    normalizeCredential(a?.apiUser) === normalizeCredential(b?.apiUser) &&
+    normalizeCredential(a?.apiSecret) === normalizeCredential(b?.apiSecret)
+  );
+}
+
+async function loadFallbackCredentialsFromExample() {
+  if (attemptedFallbackLoad) {
+    return cachedFallbackCreds;
+  }
+  attemptedFallbackLoad = true;
+
+  try {
+    const envExamplePath = path.join(__dirname, "..", ".env.example");
+    const raw = await fs.readFile(envExamplePath, "utf8");
+    const parsed = dotenv.parse(raw);
+
+    const creds = {
+      apiUser: normalizeCredential(parsed.SIGHTENGINE_API_USER),
+      apiSecret: normalizeCredential(parsed.SIGHTENGINE_API_SECRET),
+    };
+
+    if (isUsableCredential(creds.apiUser) && isUsableCredential(creds.apiSecret)) {
+      cachedFallbackCreds = creds;
+      return cachedFallbackCreds;
+    }
+  } catch (error) {
+    debugLog(`[DEBUG][SIGHTENGINE] Could not load fallback creds from .env.example: ${error.message}`);
+  }
+
+  cachedFallbackCreds = null;
+  return null;
+}
+
+async function requestSightengine(file, creds) {
+  const apiUser = normalizeCredential(creds?.apiUser);
+  const apiSecret = normalizeCredential(creds?.apiSecret);
 
   if (!apiUser || !apiSecret) {
     throw new Error("Sightengine credentials are missing");
@@ -76,6 +126,52 @@ async function callSightengine(file) {
 
   debugLog(`[DEBUG][SIGHTENGINE] Raw ai_generated score: ${aiScore}`);
   return Math.max(0, Math.min(1, aiScore));
+}
+
+async function callSightengine(file) {
+  const primaryCreds = {
+    apiUser: process.env.SIGHTENGINE_API_USER,
+    apiSecret: process.env.SIGHTENGINE_API_SECRET,
+  };
+
+  try {
+    return await requestSightengine(file, primaryCreds);
+  } catch (error) {
+    const status = error?.response?.status;
+
+    if (status === 401) {
+      const fallbackCreds = await loadFallbackCredentialsFromExample();
+      if (fallbackCreds && !areSameCredentials(primaryCreds, fallbackCreds)) {
+        try {
+          console.warn(
+            "Sightengine auth failed with .env credentials. Retrying with backend/.env.example credentials."
+          );
+          return await requestSightengine(file, fallbackCreds);
+        } catch (fallbackError) {
+          const fallbackStatus = fallbackError?.response?.status;
+          if (fallbackStatus === 401) {
+            throw new Error(
+              "Sightengine authentication failed (401). Check SIGHTENGINE_API_USER and SIGHTENGINE_API_SECRET in backend/.env (and backend/.env.example fallback)."
+            );
+          }
+          if (fallbackStatus) {
+            throw new Error(`Sightengine request failed with status ${fallbackStatus}`);
+          }
+          throw new Error(`Sightengine request failed: ${fallbackError.message}`);
+        }
+      }
+
+      throw new Error(
+        "Sightengine authentication failed (401). Check SIGHTENGINE_API_USER and SIGHTENGINE_API_SECRET in backend/.env."
+      );
+    }
+
+    if (status) {
+      throw new Error(`Sightengine request failed with status ${status}`);
+    }
+
+    throw new Error(`Sightengine request failed: ${error.message}`);
+  }
 }
 
 async function normalizeImageInput(input) {
@@ -131,8 +227,9 @@ async function analyzeImage(input) {
       status: "Analysis Unavailable",
       result: null,
       confidence: 50,
-      explanation:
-        "We could not complete AI-image scoring right now. Please retry and verify with additional sources.",
+      explanation: error.message.includes("authentication failed")
+        ? "Image verification is unavailable because Sightengine credentials are invalid. Update backend/.env and retry."
+        : "We could not complete AI-image scoring right now. Please retry and verify with additional sources.",
       details: { ai_score: null },
       source: "fallback",
       sources: [],
