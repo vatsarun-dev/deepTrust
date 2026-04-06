@@ -5,6 +5,19 @@ import { useAppContext } from "../context/AppContext.jsx";
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || "";
 
+async function parseResponseJsonSafe(response) {
+  const rawText = await response.text();
+  if (!rawText || !rawText.trim()) {
+    return null;
+  }
+
+  try {
+    return JSON.parse(rawText);
+  } catch {
+    return null;
+  }
+}
+
 function formatModelSource(source) {
   if (!source) return null;
   if (source === "puter-js") return "Puter.js (GPT-5.4 Nano)";
@@ -37,6 +50,24 @@ function toVerdictLabel(status, result) {
     return "High manipulation risk";
   }
   return "Likely authentic";
+}
+
+function getConfidenceColor(verdict) {
+  const normalized = String(verdict || "").trim().toLowerCase();
+
+  if (normalized.includes("authentic") || normalized.includes("true")) {
+    return "#34d399";
+  }
+
+  if (
+    normalized.includes("fake") ||
+    normalized.includes("misleading") ||
+    normalized.includes("manipulation")
+  ) {
+    return "#f87171";
+  }
+
+  return "#fcd34d";
 }
 
 function normalizeStatus(rawStatus) {
@@ -197,9 +228,15 @@ function CheckSection() {
         body: formData,
       });
 
-      const responseData = await response.json();
+      const responseData = await parseResponseJsonSafe(response);
       if (!response.ok) {
-        throw new Error(responseData.message || "Analysis request failed.");
+        throw new Error(
+          responseData?.message ||
+            `Analysis request failed (${response.status}).`
+        );
+      }
+      if (!responseData) {
+        throw new Error("Backend returned an empty response.");
       }
 
       const sourceLinks = extractTextSourceLinks(responseData.sources);
@@ -212,21 +249,26 @@ function CheckSection() {
       let puterNote = null;
 
       if (hasText) {
-        try {
-          const puterResult = await analyzeTextWithPuter(data.text.trim(), sourceLinks);
+        if (!sourceLinks.length) {
+          puterNote =
+            "Client AI reasoning skipped because GNews returned no evidence for this claim.";
+        } else {
+          try {
+            const puterResult = await analyzeTextWithPuter(data.text.trim(), sourceLinks);
 
-          if (!hasImage) {
-            finalStatus = puterResult.status;
-            finalResult = puterResult.result;
-            finalConfidence = puterResult.confidence;
-            finalExplanation = puterResult.explanation;
-          } else {
-            puterNote = `Client text reasoning (Puter.js): ${puterResult.explanation}`;
+            if (!hasImage) {
+              finalStatus = puterResult.status;
+              finalResult = puterResult.result;
+              finalConfidence = puterResult.confidence;
+              finalExplanation = puterResult.explanation;
+            } else {
+              puterNote = `Client text reasoning (Puter.js): ${puterResult.explanation}`;
+            }
+
+            finalSource = hasImage ? `${responseData.source || "backend"} + puter-js` : "puter-js+gnews";
+          } catch (puterError) {
+            puterNote = `Client AI reasoning unavailable: ${puterError.message}`;
           }
-
-          finalSource = hasImage ? `${responseData.source || "backend"} + puter-js` : "puter-js+gnews";
-        } catch (puterError) {
-          puterNote = `Client AI reasoning unavailable: ${puterError.message}`;
         }
       }
 
@@ -360,7 +402,10 @@ function CheckSection() {
                 </div>
                 <div>
                   <p className="text-sm text-white/45">Confidence</p>
-                  <p className="text-5xl font-semibold text-[var(--accent)]">
+                  <p
+                    className="text-5xl font-semibold"
+                    style={{ color: getConfidenceColor(analysisResult.verdict) }}
+                  >
                     {analysisResult.confidence}%
                   </p>
                 </div>

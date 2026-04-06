@@ -2,10 +2,27 @@ import { useEffect, useRef, useState } from "react";
 import { useForm } from "react-hook-form";
 import { gsap } from "gsap";
 
+const API_BASE_URL = import.meta.env.VITE_API_URL || "";
+
+async function parseResponseJsonSafe(response) {
+  const rawText = await response.text();
+  if (!rawText || !rawText.trim()) {
+    return null;
+  }
+
+  try {
+    return JSON.parse(rawText);
+  } catch {
+    return null;
+  }
+}
+
 function ComplaintSection() {
   const sectionRef = useRef(null);
   const resetTimerRef = useRef(null);
   const [submitted, setSubmitted] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [apiError, setApiError] = useState("");
   const {
     register,
     handleSubmit,
@@ -42,11 +59,50 @@ function ComplaintSection() {
     };
   }, []);
 
-  const onSubmit = (data) => {
-    console.log("DeepTrust complaint submission", data);
-    setSubmitted(true);
-    reset();
-    resetTimerRef.current = window.setTimeout(() => setSubmitted(false), 2600);
+  const onSubmit = async (data) => {
+    setSubmitting(true);
+    setApiError("");
+
+    if (resetTimerRef.current) {
+      window.clearTimeout(resetTimerRef.current);
+      resetTimerRef.current = null;
+    }
+
+    try {
+      const payload = {
+        name: String(data.name || "").trim(),
+        email: String(data.email || "").trim(),
+        description: String(data.description || "").trim(),
+      };
+
+      const response = await fetch(`${API_BASE_URL}/api/complaint`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(payload),
+      });
+
+      const responseData = await parseResponseJsonSafe(response);
+      if (!response.ok) {
+        throw new Error(
+          responseData?.message || `Complaint request failed (${response.status}).`
+        );
+      }
+
+      if (!responseData?.success) {
+        throw new Error("Complaint submission failed. Please try again.");
+      }
+
+      setSubmitted(true);
+      reset();
+      resetTimerRef.current = window.setTimeout(() => setSubmitted(false), 2600);
+    } catch (error) {
+      setSubmitted(false);
+      setApiError(error.message || "Unable to submit complaint right now.");
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   return (
@@ -130,13 +186,15 @@ function ComplaintSection() {
           </div>
 
           <div className="mt-6 flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
-            <button type="submit" className="dt-button">
-              Submit Complaint
+            <button type="submit" className="dt-button" disabled={submitting}>
+              {submitting ? "Submitting..." : "Submit Complaint"}
             </button>
             <p className="text-sm leading-6 text-white/50">
-              {submitted
-                ? "Complaint staged successfully. Mock API received the payload."
-                : "Submissions currently log to console and simulate a reporting pipeline."}
+              {apiError
+                ? apiError
+                : submitted
+                  ? "Complaint submitted and saved to the database."
+                  : "Submit your complaint and it will be stored in MongoDB."}
             </p>
           </div>
         </form>

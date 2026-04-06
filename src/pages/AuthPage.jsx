@@ -5,6 +5,19 @@ import { useAppContext } from "../context/AppContext.jsx";
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || "";
 
+async function parseResponseJsonSafe(response) {
+  const rawText = await response.text();
+  if (!rawText || !rawText.trim()) {
+    return null;
+  }
+
+  try {
+    return JSON.parse(rawText);
+  } catch {
+    return null;
+  }
+}
+
 function AuthPage() {
   const [mode, setMode] = useState("login");
   const [submitting, setSubmitting] = useState(false);
@@ -49,10 +62,15 @@ function AuthPage() {
         body: JSON.stringify(payload),
       });
 
-      const responseData = await response.json();
+      const responseData = await parseResponseJsonSafe(response);
 
       if (!response.ok) {
-        throw new Error(responseData.message || "Authentication failed.");
+        throw new Error(
+          responseData?.message || `Authentication failed (${response.status}).`
+        );
+      }
+      if (!responseData) {
+        throw new Error("Backend returned an empty response.");
       }
 
       setUser(responseData.user);
