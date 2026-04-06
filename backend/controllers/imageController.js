@@ -1,4 +1,4 @@
-const { analyzeImage } = require("../services/imageDetectionService");
+const { analyzeImage } = require("../services/enhancedImageDetectionService");
 
 async function checkImage(req, res, next) {
   try {

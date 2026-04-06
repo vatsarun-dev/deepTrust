@@ -28,54 +28,28 @@ function sanitizeForGNewsQuery(text) {
 }
 
 function extractKeywords(text) {
-  return Array.from(
-    new Set(
-      String(text || "")
-        .toLowerCase()
-        .replace(/[^a-z0-9\s]/g, " ")
-        .split(/\s+/)
-        .filter((word) => word.length >= 4)
-        .filter(
-          (word) =>
-            ![
-              "this",
-              "that",
-              "with",
-              "from",
-              "have",
-              "will",
-              "your",
-              "about",
-              "there",
-              "their",
-              "which",
-              "would",
-              "could",
-              "should",
-              "after",
-              "before",
-              "where",
-              "when",
-              "what",
-              "these",
-              "those",
-              "into",
-              "than",
-              "been",
-              "being",
-              "also",
-              "just",
-              "only",
-              "very",
-              "because",
-              "claim",
-              "article",
-              "post",
-              "news",
-            ].includes(word)
-        )
-    )
-  );
+  const words = String(text || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, " ")
+    .split(/\s+/)
+    .filter((word) => word.length >= 2);
+
+  const stopWords = [
+    "this", "that", "with", "from", "have", "will", "your", "about",
+    "there", "their", "which", "would", "could", "should", "after",
+    "before", "where", "when", "what", "these", "those", "into",
+    "than", "been", "being", "also", "just", "only", "very",
+    "because", "claim", "article", "post", "news", "true", "false",
+    "real", "fake", "that", "did", "does", "was", "were"
+  ];
+
+  const importantWords = words.filter((word) => {
+    if (word.length === 2) return false;
+    if (word.length === 3) return !stopWords.includes(word);
+    return !stopWords.includes(word);
+  });
+
+  return Array.from(new Set(importantWords));
 }
 
 function buildSearchQueries(rawQuery) {
@@ -83,12 +57,27 @@ function buildSearchQueries(rawQuery) {
   const compact = sanitizeForGNewsQuery(normalized);
   const keywords = extractKeywords(compact);
 
-  const phrase = compact.split(" ").slice(0, 12).join(" ");
-  const keywordQuery = keywords.slice(0, 6).join(" ");
-  const strictKeywordQuery = keywords.slice(0, 4).join(" ");
+  const queries = [];
+  
+  if (compact && compact.length > 0) {
+    queries.push(compact);
+  }
 
-  const candidates = [compact, phrase, keywordQuery, strictKeywordQuery].filter(Boolean);
-  return Array.from(new Set(candidates));
+  if (keywords.length >= 2) {
+    const topKeywords = keywords.slice(0, 8).join(" ");
+    if (topKeywords && topKeywords !== compact) {
+      queries.push(topKeywords);
+    }
+  }
+
+  if (keywords.length >= 3) {
+    const coreKeywords = keywords.slice(0, 5).join(" ");
+    if (coreKeywords && coreKeywords !== compact && !queries.includes(coreKeywords)) {
+      queries.push(coreKeywords);
+    }
+  }
+
+  return queries.filter(Boolean).filter((q, i, arr) => arr.indexOf(q) === i);
 }
 
 function mapArticles(data) {
@@ -165,6 +154,33 @@ async function fetchRelevantNews(query) {
 
       const data = await response.json();
       const rawCount = Array.isArray(data?.articles) ? data.articles.length : 0;
+      
+      // Log complete GNews response data
+      console.log('\n====================================');
+      console.log('[GNEWS] Raw Response Data:');
+      console.log('====================================');
+      console.log(`Query: "${searchQuery}"`);
+      console.log(`Total Results: ${data.totalArticles || rawCount}`);
+      console.log(`Articles Returned: ${rawCount}`);
+      console.log('\nArticles:');
+      
+      if (data.articles && data.articles.length > 0) {
+        data.articles.forEach((article, idx) => {
+          console.log(`\n--- Article ${idx + 1} ---`);
+          console.log(`Title: ${article.title || 'N/A'}`);
+          console.log(`Description: ${article.description || 'N/A'}`);
+          console.log(`Source: ${article.source?.name || 'N/A'}`);
+          console.log(`URL: ${article.url || 'N/A'}`);
+          console.log(`Published: ${article.publishedAt || 'N/A'}`);
+          console.log(`Image: ${article.image || 'N/A'}`);
+          console.log(`Content: ${article.content ? article.content.substring(0, 100) + '...' : 'N/A'}`);
+        });
+      } else {
+        console.log('No articles found');
+      }
+      
+      console.log('\n====================================\n');
+      
       debugLog(`[DEBUG][GNEWS] Query "${searchQuery}" returned ${rawCount} raw article(s).`);
 
       const mapped = mapArticles(data);
@@ -184,6 +200,20 @@ async function fetchRelevantNews(query) {
     }
 
     debugLog(`[DEBUG][GNEWS] Final unique article count: ${merged.length}`);
+    
+    // Final summary log
+    console.log('\n====================================');
+    console.log('[GNEWS] Final Results Summary:');
+    console.log('====================================');
+    console.log(`Total unique articles collected: ${merged.length}`);
+    if (merged.length > 0) {
+      console.log('\nSelected Articles for AI Analysis:');
+      merged.forEach((article, idx) => {
+        console.log(`${idx + 1}. ${article.title} (${article.source})`);
+      });
+    }
+    console.log('====================================\n');
+    
     if (merged.length < MAX_ARTICLES) {
       console.warn(
         `[DEBUG][GNEWS] Fewer than ${MAX_ARTICLES} articles found. Falling back to limited evidence.`
