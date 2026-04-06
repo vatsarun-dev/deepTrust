@@ -5,6 +5,8 @@ const path = require("path");
 const connectDB = require("./config/db");
 const analysisRoutes = require("./routes/analysisRoutes");
 const complaintRoutes = require("./routes/complaintRoutes");
+const authRoutes = require("./routes/authRoutes");
+const imageRoutes = require("./routes/imageRoutes");
 const { notFound, errorHandler } = require("./middleware/errorMiddleware");
 
 dotenv.config();
@@ -31,7 +33,10 @@ app.get("/api/health", (req, res) => {
 });
 
 app.use("/api/analyze", analysisRoutes);
+app.use("/api/check", analysisRoutes);
 app.use("/api/complaint", complaintRoutes);
+app.use("/api/auth", authRoutes);
+app.use("/api", imageRoutes);
 
 app.use(notFound);
 app.use(errorHandler);

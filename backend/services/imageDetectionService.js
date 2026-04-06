@@ -1,98 +1,143 @@
+const axios = require("axios");
+const FormData = require("form-data");
 const fs = require("fs/promises");
 const path = require("path");
 
-const suspiciousNames = [
-  "deepfake",
-  "synthetic",
-  "fake",
-  "edited",
-  "manipulated",
-  "clone",
-];
+const SIGHTENGINE_API_URL = "https://api.sightengine.com/1.0/check.json";
 
-async function runFallbackImageAnalysis(imagePath) {
-  const fileStats = await fs.stat(imagePath);
-  const fileName = path.basename(imagePath).toLowerCase();
-  let suspicionScore = 44;
-
-  suspiciousNames.forEach((keyword) => {
-    if (fileName.includes(keyword)) {
-      suspicionScore += 10;
-    }
-  });
-
-  if (fileStats.size > 1_500_000) {
-    suspicionScore += 6;
-  }
-
-  const confidence = Math.max(55, Math.min(91, suspicionScore));
-  const result = confidence >= 68 ? "Fake" : "Real";
-
-  return {
-    result,
-    confidence,
-    explanation:
-      result === "Fake"
-        ? "The image fallback detector found naming or file-level signals consistent with manipulated or synthetic media."
-        : "The image fallback detector did not find strong file-level signals of manipulation, though forensic review may still be needed.",
-    source: "fallback",
-  };
+function isDebugEnabled() {
+  return process.env.DEBUG_ANALYSIS === "true";
 }
 
-async function analyzeWithDeepAI(imagePath) {
-  const buffer = await fs.readFile(imagePath);
-  const fileName = path.basename(imagePath);
-  const formData = new FormData();
-
-  formData.append("image", new Blob([buffer]), fileName);
-
-  const response = await fetch("https://api.deepai.org/api/nsfw-detector", {
-    method: "POST",
-    headers: {
-      "Api-Key": process.env.IMAGE_API_KEY,
-    },
-    body: formData,
-  });
-
-  if (!response.ok) {
-    throw new Error(`Image provider request failed with status ${response.status}`);
+function debugLog(message) {
+  if (isDebugEnabled()) {
+    console.log(message);
   }
-
-  const data = await response.json();
-  const output = Array.isArray(data.output) ? data.output : [];
-  const strongest = output.reduce(
-    (max, item) => (Number(item.confidence || 0) > Number(max.confidence || 0) ? item : max),
-    { confidence: 0 }
-  );
-
-  const confidence = Math.round(Number(strongest.confidence || 0) * 100);
-  const result = confidence >= 65 ? "Fake" : "Real";
-
-  return {
-    result,
-    confidence: Math.max(50, Math.min(98, confidence || 58)),
-    explanation:
-      result === "Fake"
-        ? "The external image provider returned a higher-risk confidence score, suggesting the upload deserves deeper authenticity review."
-        : "The external image provider returned a lower-risk confidence score, suggesting fewer obvious manipulation indicators.",
-    source: "deepai",
-  };
 }
 
-async function analyzeImage(imagePath) {
-  if (!imagePath) {
+function deriveStatus(aiScore) {
+  if (aiScore > 0.85) {
+    return "AI Generated";
+  }
+  if (aiScore > 0.6) {
+    return "Possibly AI Generated";
+  }
+  return "Likely Real";
+}
+
+function statusToResult(status) {
+  if (status === "Likely Real") {
+    return "Real";
+  }
+  if (status === "AI Generated" || status === "Possibly AI Generated") {
+    return "Fake";
+  }
+  return null;
+}
+
+function buildDefaultExplanation(status, confidence) {
+  if (status === "AI Generated") {
+    return `This image is likely AI-generated with ${confidence}% confidence based on synthetic pattern detection.`;
+  }
+  if (status === "Possibly AI Generated") {
+    return `This image shows some AI-like signals with ${confidence}% confidence, but evidence is not conclusive.`;
+  }
+  return `This image appears likely real with ${confidence}% confidence because strong synthetic indicators were not detected.`;
+}
+
+async function callSightengine(file) {
+  const apiUser = process.env.SIGHTENGINE_API_USER;
+  const apiSecret = process.env.SIGHTENGINE_API_SECRET;
+
+  if (!apiUser || !apiSecret) {
+    throw new Error("Sightengine credentials are missing");
+  }
+
+  const form = new FormData();
+  form.append("models", "genai");
+  form.append("api_user", apiUser);
+  form.append("api_secret", apiSecret);
+  form.append("media", file.buffer, {
+    filename: file.originalname || "upload.jpg",
+    contentType: file.mimetype || "application/octet-stream",
+  });
+
+  const response = await axios.post(SIGHTENGINE_API_URL, form, {
+    headers: form.getHeaders(),
+    timeout: 15000,
+    maxContentLength: 8 * 1024 * 1024,
+    maxBodyLength: 8 * 1024 * 1024,
+  });
+
+  const aiScore = Number(response?.data?.type?.ai_generated);
+  if (!Number.isFinite(aiScore)) {
+    throw new Error("Sightengine did not return ai_generated score");
+  }
+
+  debugLog(`[DEBUG][SIGHTENGINE] Raw ai_generated score: ${aiScore}`);
+  return Math.max(0, Math.min(1, aiScore));
+}
+
+async function normalizeImageInput(input) {
+  if (!input) {
     return null;
   }
 
-  if (process.env.IMAGE_API_KEY) {
-    try {
-      return await analyzeWithDeepAI(imagePath);
-    } catch (error) {
-      console.warn(`Falling back to local image analysis: ${error.message}`);
-    }
+  if (input.buffer && Buffer.isBuffer(input.buffer)) {
+    return input;
   }
 
-  return runFallbackImageAnalysis(imagePath);
+  if (typeof input === "string") {
+    const filePath = input;
+    const buffer = await fs.readFile(filePath);
+    const ext = path.extname(filePath).toLowerCase();
+    const mimetype = ext === ".png" ? "image/png" : "image/jpeg";
+    return {
+      buffer,
+      originalname: path.basename(filePath),
+      mimetype,
+    };
+  }
+
+  return null;
+}
+
+async function analyzeImage(input) {
+  const file = await normalizeImageInput(input);
+  if (!file || !file.buffer) return null;
+
+  try {
+    const aiScore = await callSightengine(file);
+    const status = deriveStatus(aiScore);
+    const confidence = Math.round(aiScore * 100);
+    const result = statusToResult(status);
+
+    debugLog(
+      `[DEBUG][IMAGE] Hard decision from Sightengine -> ai_score=${aiScore}, status="${status}", confidence=${confidence}`
+    );
+
+    return {
+      status,
+      result,
+      confidence,
+      explanation: buildDefaultExplanation(status, confidence),
+      details: { ai_score: aiScore },
+      source: "sightengine",
+      sources: [],
+    };
+  } catch (error) {
+    console.warn(`Sightengine failed, returning safe fallback: ${error.message}`);
+    return {
+      status: "Analysis Unavailable",
+      result: null,
+      confidence: 50,
+      explanation:
+        "We could not complete AI-image scoring right now. Please retry and verify with additional sources.",
+      details: { ai_score: null },
+      source: "fallback",
+      sources: [],
+    };
+  }
 }
 
 module.exports = {

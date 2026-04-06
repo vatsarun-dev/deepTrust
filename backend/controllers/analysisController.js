@@ -6,15 +6,38 @@ function mergeResults(textResult, imageResult) {
   const availableResults = [textResult, imageResult].filter(Boolean);
 
   if (!availableResults.length) {
-    return null;
+    return {
+      status: "Analysis Unavailable",
+      result: null,
+      confidence: 50,
+      explanation: "No valid analysis result could be produced. Please retry.",
+      source_match: null,
+      sources: [],
+      source: "fallback",
+    };
   }
 
   if (availableResults.length === 1) {
+    const single = availableResults[0];
+    const isArraySources = Array.isArray(single.sources);
+    const defaultSources =
+      single.source === "sightengine"
+        ? { text: "n/a", image: "sightengine" }
+        : { text: single.source || "fallback", image: "n/a" };
+
     return {
-      result: availableResults[0].result,
-      confidence: availableResults[0].confidence,
-      explanation: availableResults[0].explanation,
-      source: availableResults[0].source,
+      status: single.status || single.result,
+      result: single.result || null,
+      confidence: single.confidence,
+      explanation: single.explanation,
+      source_match: single.source_match || null,
+      sources: isArraySources
+        ? single.sources
+        :
+        single.sources && typeof single.sources === "object" && !Array.isArray(single.sources)
+          ? single.sources
+          : defaultSources,
+      source: single.source,
     };
   }
 
@@ -24,11 +47,13 @@ function mergeResults(textResult, imageResult) {
   );
 
   return {
+    status: fakeVotes.length > 0 ? "Misleading" : "Likely True",
     result: fakeVotes.length > 0 ? "Fake" : "Real",
     confidence: averageConfidence,
-    explanation: `${textResult.explanation} ${imageResult.explanation}`.trim(),
+    explanation: `${textResult?.explanation || ""} ${imageResult?.explanation || ""}`.trim(),
+    source_match: textResult ? textResult.source_match || null : null,
     sources: {
-      text: textResult ? textResult.source : null,
+      text: textResult ? textResult.sources || [] : [],
       image: imageResult ? imageResult.source : null,
     },
   };

@@ -1,245 +1,205 @@
-const HUGGING_FACE_MODEL_URL =
-  "https://router.huggingface.co/hf-inference/models/facebook/bart-large-mnli";
+const { fetchRelevantNews } = require("./gnewsService");
 
-const REQUEST_TIMEOUT_MS = 12000;
-const MAX_RETRIES = 2;
+const STOP_WORDS = new Set([
+  "this",
+  "that",
+  "with",
+  "from",
+  "have",
+  "will",
+  "your",
+  "about",
+  "there",
+  "their",
+  "which",
+  "would",
+  "could",
+  "should",
+  "after",
+  "before",
+  "where",
+  "when",
+  "what",
+  "these",
+  "those",
+  "into",
+  "than",
+  "been",
+  "being",
+  "also",
+  "just",
+  "only",
+  "very",
+  "because",
+  "claim",
+  "article",
+  "post",
+  "news",
+]);
 
-const suspiciousPatterns = [
-  { regex: /\b(shocking|unbelievable|you won't believe|jaw-dropping)\b/i, score: 18 },
-  { regex: /\b(breaking|urgent|must read|exposed)\b/i, score: 14 },
-  { regex: /\b(guaranteed|proven|everyone knows|the truth they hide)\b/i, score: 16 },
-  { regex: /\b(share this now|spread this|before it gets deleted)\b/i, score: 20 },
-  { regex: /\b(secret cure|miracle cure|doctors hate this)\b/i, score: 22 },
-  { regex: /\b(100%|no doubt|undeniable proof|confirmed by everyone)\b/i, score: 16 },
-  { regex: /[!?]{2,}/, score: 10 },
-];
+const CONTRADICT_TERMS =
+  /\b(false|fake|myth|hoax|debunk|debunked|refute|refuted|misleading|not true|no evidence|denied|incorrect|scam|impossible)\b/i;
+const SUPPORT_TERMS =
+  /\b(confirmed|verify|verified|evidence|study|official|reported|supports|supporting|according to)\b/i;
 
-function delay(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+function isDebugEnabled() {
+  return process.env.DEBUG_ANALYSIS === "true";
+}
+
+function debugLog(message) {
+  if (isDebugEnabled()) {
+    console.log(message);
+  }
 }
 
 function normalizeText(text) {
   return String(text || "").trim();
 }
 
-function runFallbackAnalysis(text) {
-  const normalizedText = normalizeText(text);
-  const lowerText = normalizedText.toLowerCase();
-  let suspicionScore = 22;
+function statusToLegacyResult(status) {
+  if (status === "True" || status === "Likely True") return "Real";
+  if (status === "Unverified") return null;
+  return "Fake";
+}
 
-  suspiciousPatterns.forEach((pattern) => {
-    if (pattern.regex.test(lowerText)) {
-      suspicionScore += pattern.score;
-    }
-  });
+function tokenizeForMatching(text) {
+  return Array.from(
+    new Set(
+      String(text || "")
+        .toLowerCase()
+        .replace(/[^a-z0-9\s]/g, " ")
+        .split(/\s+/)
+        .filter((word) => word.length >= 4)
+        .filter((word) => !STOP_WORDS.has(word))
+    )
+  );
+}
 
-  if (normalizedText.length < 60) {
-    suspicionScore += 8;
+function computeArticleOverlap(claimTokens, article) {
+  if (!claimTokens.length) {
+    return 0;
   }
+  const articleText = `${article.title || ""} ${article.description || ""}`.toLowerCase();
+  const matchedCount = claimTokens.filter((token) => articleText.includes(token)).length;
+  return matchedCount / claimTokens.length;
+}
 
-  if (normalizedText.length > 600) {
-    suspicionScore -= 5;
-  }
+function classifyArticleVerdict(article) {
+  const articleText = `${article.title || ""} ${article.description || ""}`;
+  if (CONTRADICT_TERMS.test(articleText)) return "contradict";
+  if (SUPPORT_TERMS.test(articleText)) return "support";
+  return "neutral";
+}
 
-  if (/\b(always|never|everyone|nobody|all|none)\b/i.test(normalizedText)) {
-    suspicionScore += 10;
-  }
+function mapSources(articles) {
+  return articles.slice(0, 3).map((article) => ({
+    title: String(article?.title || "").trim(),
+    url: String(article?.url || "").trim(),
+  }));
+}
 
-  if (/\b(allegedly|according to|reportedly|claimed|claims|may|might)\b/i.test(normalizedText)) {
-    suspicionScore -= 6;
-  }
-
-  if (/["'][^"']+["']/.test(normalizedText)) {
-    suspicionScore -= 4;
-  }
-
-  if (/\b(http|www\.|source:|study|report|data)\b/i.test(normalizedText)) {
-    suspicionScore -= 8;
-  }
-
-  const boundedScore = Math.max(8, Math.min(95, suspicionScore));
-  const confidence = Math.max(50, boundedScore);
-  const result = boundedScore >= 62 ? "Fake" : "Real";
-  const explanation =
-    result === "Fake"
-      ? "The text contains sensational phrasing, pressure tactics, or exaggerated certainty that commonly appears in misleading posts."
-      : "The text appears more measured and includes fewer manipulation signals in the local analysis.";
-
+function buildUnverifiedResult(articles, explanation) {
   return {
-    result,
-    confidence,
+    status: "Unverified",
+    result: null,
+    confidence: 45,
     explanation,
-    source: "fallback",
+    source_match: "none",
+    sources: mapSources(articles),
+    source: "gnews",
   };
 }
 
-async function postToHuggingFace(text, attempt = 0) {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+function scoreFromGNews(claimText, articles) {
+  const claimTokens = tokenizeForMatching(claimText);
+  const scored = articles
+    .map((article) => ({
+      article,
+      overlap: computeArticleOverlap(claimTokens, article),
+      verdict: classifyArticleVerdict(article),
+    }))
+    .sort((a, b) => b.overlap - a.overlap);
 
-  try {
-    const response = await fetch(HUGGING_FACE_MODEL_URL, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${process.env.AI_API_KEY}`,
-        "Content-Type": "application/json",
-      },
-      signal: controller.signal,
-      body: JSON.stringify({
-        inputs: text,
-        parameters: {
-          candidate_labels: [
-            "fabricated news",
-            "misleading claim",
-            "clickbait or sensationalized",
-            "credible reporting",
-          ],
-          hypothesis_template: "This text is {}.",
-        },
-        options: {
-          wait_for_model: true,
-          use_cache: false,
-        },
-      }),
-    });
+  const relevant = scored.filter((item) => item.overlap >= 0.2);
+  const candidate = relevant.length ? relevant : scored.slice(0, 1).filter((item) => item.overlap >= 0.1);
 
-    clearTimeout(timeout);
-    return response;
-  } catch (error) {
-    clearTimeout(timeout);
-
-    if (attempt < MAX_RETRIES) {
-      await delay(700 * (attempt + 1));
-      return postToHuggingFace(text, attempt + 1);
-    }
-
-    if (error.name === "AbortError") {
-      throw new Error("HuggingFace request timed out");
-    }
-
-    throw new Error(`HuggingFace network error: ${error.message}`);
-  }
-}
-
-function parseHuggingFacePairs(data) {
-  let pairs = [];
-
-  if (Array.isArray(data)) {
-    pairs = data.map((item) => ({
-      label: String(item?.label || "").toLowerCase(),
-      score: Number(item?.score || 0),
-    }));
-  } else if (data && Array.isArray(data.labels) && Array.isArray(data.scores)) {
-    pairs = data.labels.map((label, index) => ({
-      label: String(label).toLowerCase(),
-      score: Number(data.scores[index] || 0),
-    }));
-  } else if (data && typeof data.error === "string") {
-    throw new Error(`HuggingFace error: ${data.error}`);
-  } else {
-    throw new Error(`Unexpected HuggingFace response format: ${JSON.stringify(data)}`);
-  }
-
-  pairs = pairs.filter((item) => item.label && Number.isFinite(item.score));
-
-  if (!pairs.length) {
-    throw new Error("HuggingFace returned no usable classification scores");
-  }
-
-  return pairs;
-}
-
-async function analyzeWithHuggingFace(text) {
-  let attempt = 0;
-
-  while (attempt <= MAX_RETRIES) {
-    const response = await postToHuggingFace(text, attempt);
-
-    if (!response.ok) {
-      const errorText = await response.text().catch(() => "");
-
-      if ((response.status === 429 || response.status >= 500) && attempt < MAX_RETRIES) {
-        attempt += 1;
-        await delay(900 * attempt);
-        continue;
-      }
-
-      throw new Error(
-        `HuggingFace request failed with status ${response.status}${errorText ? `: ${errorText}` : ""}`
-      );
-    }
-
-    const data = await response.json();
-
-    if (data && typeof data.error === "string" && /loading/i.test(data.error) && attempt < MAX_RETRIES) {
-      const waitSeconds = Number(data.estimated_time || 1);
-      attempt += 1;
-      await delay(Math.min(Math.ceil(waitSeconds * 1000), 5000));
-      continue;
-    }
-
-    const pairs = parseHuggingFacePairs(data);
-
-    const fakeSignals = pairs.filter((item) =>
-      ["fabricated news", "misleading claim", "clickbait or sensationalized"].includes(item.label)
+  if (!candidate.length) {
+    return buildUnverifiedResult(
+      articles,
+      "No strong matching evidence was found in current GNews coverage."
     );
-    const realSignal = pairs.find((item) => item.label === "credible reporting");
-
-    const fakeScore = fakeSignals.reduce((sum, item) => sum + item.score, 0);
-    const realScore = realSignal ? realSignal.score : 0;
-    const result = fakeScore >= realScore ? "Fake" : "Real";
-    const confidence = Math.round(Math.max(fakeScore, realScore) * 100);
-    const explanation =
-      result === "Fake"
-        ? "The external text model found stronger alignment with fabricated, misleading, or sensational reporting patterns."
-        : "The external text model found stronger alignment with more credible reporting language.";
-
-    return {
-      result,
-      confidence: Math.max(50, Math.min(99, confidence)),
-      explanation,
-      source: "huggingface",
-    };
   }
 
-  throw new Error("HuggingFace request did not return a usable result");
-}
+  const supportCount = candidate.filter((item) => item.verdict === "support").length;
+  const contradictCount = candidate.filter((item) => item.verdict === "contradict").length;
+  const maxOverlap = candidate.reduce((max, item) => Math.max(max, item.overlap), 0);
+  const sourceMatch = candidate.length >= 2 && maxOverlap >= 0.3 ? "strong" : "weak";
+  const hasStrongEvidence = sourceMatch === "strong";
 
-function blendResults(huggingFaceResult, fallbackResult) {
-  const weightedConfidence = Math.round(
-    huggingFaceResult.confidence * 0.75 + fallbackResult.confidence * 0.25
-  );
-  const agreement = huggingFaceResult.result === fallbackResult.result;
+  let status = "Unverified";
+  let confidence = sourceMatch === "strong" ? 70 : 62;
+  let explanation = `Evidence is mixed across ${candidate.length} relevant GNews article(s).`;
+
+  if (hasStrongEvidence && contradictCount > supportCount) {
+    status = "Fake";
+    confidence = sourceMatch === "strong" ? 88 : 76;
+    explanation = `GNews evidence contradicts this claim across ${candidate.length} relevant article(s).`;
+  } else if (hasStrongEvidence && supportCount > contradictCount) {
+    status = sourceMatch === "strong" ? "True" : "Likely True";
+    confidence = sourceMatch === "strong" ? 86 : 74;
+    explanation = `GNews evidence supports this claim across ${candidate.length} relevant article(s).`;
+  } else {
+    status = "Unverified";
+    confidence = 55;
+    explanation =
+      "Only limited or weakly matching GNews evidence is available; keeping this claim as Unverified.";
+  }
 
   return {
-    result: agreement ? huggingFaceResult.result : huggingFaceResult.result,
-    confidence: agreement ? weightedConfidence : Math.max(55, weightedConfidence - 6),
-    explanation: agreement
-      ? `${huggingFaceResult.explanation} Local heuristics point in the same direction.`
-      : `${huggingFaceResult.explanation} Local heuristics were less certain, so this should be treated as a risk estimate rather than a fact check.`,
-    source: "huggingface",
+    status,
+    result: statusToLegacyResult(status),
+    confidence,
+    explanation,
+    source_match: sourceMatch,
+    sources: candidate.slice(0, 3).map((item) => ({
+      title: item.article.title,
+      url: item.article.url,
+    })),
+    source: "gnews",
   };
 }
 
 async function analyzeFakeNews(text) {
   const normalizedText = normalizeText(text);
-
   if (!normalizedText) {
     return null;
   }
 
-  const fallbackResult = runFallbackAnalysis(normalizedText);
-
-  if (process.env.AI_API_KEY) {
-    try {
-      const huggingFaceResult = await analyzeWithHuggingFace(normalizedText);
-      return blendResults(huggingFaceResult, fallbackResult);
-    } catch (error) {
-      console.warn(`Falling back to local text analysis: ${error.message}`);
-    }
+  let articles = [];
+  try {
+    articles = await fetchRelevantNews(normalizedText);
+  } catch (error) {
+    console.warn(`GNews fetch failed, continuing with unverified fallback: ${error.message}`);
+    articles = [];
   }
 
-  return fallbackResult;
+  debugLog(
+    `[DEBUG][TEXT] GNews top articles: ${JSON.stringify(
+      articles.slice(0, 3).map((article) => ({
+        title: article.title,
+        url: article.url,
+      }))
+    )}`
+  );
+
+  if (!articles.length) {
+    return buildUnverifiedResult(
+      [],
+      "No relevant GNews articles were found for this claim."
+    );
+  }
+
+  return scoreFromGNews(normalizedText, articles.slice(0, 3));
 }
 
 module.exports = {
