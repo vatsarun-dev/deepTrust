@@ -1,4 +1,5 @@
 const { fetchRelevantNews, getGNewsAvailabilityStatus } = require("./gnewsService");
+const { analyzeWithPuter } = require("./puterService");
 
 const STOP_WORDS = new Set([
   "this",
@@ -197,6 +198,14 @@ async function analyzeFakeNews(text) {
 
   if (!articles.length) {
     if (gnewsAvailability.reason === "quota_exhausted" && gnewsAvailability.quotaBlocked) {
+      const puterFallback = await analyzeWithPuter(normalizedText, []);
+      if (puterFallback) {
+        return {
+          ...puterFallback,
+          explanation: `${puterFallback.explanation} (GNews quota reached until ${gnewsAvailability.blockedUntil || "next reset at 00:00 UTC"}.)`,
+        };
+      }
+
       const resetAt = gnewsAvailability.blockedUntil || "next reset at 00:00 UTC";
       return buildUnverifiedResult(
         [],
@@ -207,6 +216,14 @@ async function analyzeFakeNews(text) {
     }
 
     if (gnewsAvailability.reason === "missing_api_key") {
+      const puterFallback = await analyzeWithPuter(normalizedText, []);
+      if (puterFallback) {
+        return {
+          ...puterFallback,
+          explanation: `${puterFallback.explanation} (GNews API key is missing, so this result used Puter.js only.)`,
+        };
+      }
+
       return buildUnverifiedResult(
         [],
         "GNews API key is missing in backend configuration, so claim verification cannot run.",
@@ -215,10 +232,35 @@ async function analyzeFakeNews(text) {
       );
     }
 
-    return buildUnverifiedResult([], "No relevant GNews articles were found for this claim.");
+    const puterFallback = await analyzeWithPuter(normalizedText, []);
+    if (puterFallback) {
+      return puterFallback;
+    }
+
+    const unavailabilityReason = gnewsAvailability.reason
+      ? ` (GNews status: ${gnewsAvailability.reason})`
+      : "";
+    return buildUnverifiedResult(
+      [],
+      `No relevant GNews articles were found for this claim${unavailabilityReason}.`
+    );
   }
 
-  return scoreFromGNews(normalizedText, articles.slice(0, 3));
+  const gnewsScored = scoreFromGNews(normalizedText, articles.slice(0, 3));
+  if (gnewsScored.status !== "Unverified") {
+    return gnewsScored;
+  }
+
+  const puterWithEvidence = await analyzeWithPuter(normalizedText, articles.slice(0, 3));
+  if (!puterWithEvidence) {
+    return gnewsScored;
+  }
+
+  return {
+    ...puterWithEvidence,
+    sources: gnewsScored.sources?.length ? gnewsScored.sources : puterWithEvidence.sources,
+    source_match: gnewsScored.source_match || puterWithEvidence.source_match,
+  };
 }
 
 module.exports = {
