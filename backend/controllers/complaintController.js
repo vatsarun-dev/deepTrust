@@ -1,6 +1,12 @@
 const fs = require("fs/promises");
 const Complaint = require("../models/Complaint");
+const { isDatabaseReady } = require("../config/db");
 const { buildComplaintDraft, classifyByKeywords } = require("../services/complaintAIService");
+const {
+  buildImpactScore,
+  buildEmotionalRisk,
+  buildComplaintPriority,
+} = require("../services/intelligenceService");
 
 function normalizeText(value) {
   return String(value || "").trim();
@@ -141,11 +147,16 @@ async function generateComplaintDraft(req, res, next) {
     };
 
     const generated = await buildComplaintDraft(input);
+    const impact = buildImpactScore(description);
+    const emotional = buildEmotionalRisk(description);
     res.status(200).json({
       success: true,
       complaintType: generated.complaintType,
       aiComplaint: generated.draft,
       recommendedActions: generated.recommendedActions,
+      impact,
+      emotionalRisk: emotional.emotionalRisk,
+      priority: buildComplaintPriority(emotional.emotionalRisk, impact),
     });
   } catch (error) {
     next(error);
@@ -156,6 +167,11 @@ async function submitComplaint(req, res, next) {
   const uploadedFiles = Array.isArray(req.files) ? req.files : [];
 
   try {
+    if (!isDatabaseReady()) {
+      res.status(503);
+      throw new Error("Database is temporarily unavailable. Complaint drafting still works, but complaint storage is offline right now.");
+    }
+
     const name = normalizeText(req.body.name);
     const email = normalizeText(req.body.email);
     const description = normalizeText(req.body.description);
@@ -168,6 +184,9 @@ async function submitComplaint(req, res, next) {
     }
 
     const evidence = buildEvidenceList(req);
+    const impact = buildImpactScore(description);
+    const emotional = buildEmotionalRisk(description);
+    const priority = buildComplaintPriority(emotional.emotionalRisk, impact);
 
     const generated = await buildComplaintDraft({
       issueType,
@@ -185,6 +204,8 @@ async function submitComplaint(req, res, next) {
       complaintType: generated.complaintType || classifyByKeywords({ description, platform, issueType }),
       platform,
       severity: generated?.draft?.severity || "Medium",
+      priority,
+      emotionalRisk: emotional.emotionalRisk,
       aiComplaint: generated.draft,
       recommendations: generated.recommendedActions || [],
       evidence,
@@ -196,6 +217,9 @@ async function submitComplaint(req, res, next) {
       complaint,
       aiComplaint: generated.draft,
       recommendedActions: generated.recommendedActions,
+      impact,
+      emotionalRisk: emotional.emotionalRisk,
+      priority,
     });
   } catch (error) {
     // Cleanup files if save fails.
@@ -215,6 +239,11 @@ async function submitComplaint(req, res, next) {
 
 async function downloadComplaintPdf(req, res, next) {
   try {
+    if (!isDatabaseReady()) {
+      res.status(503);
+      throw new Error("Database is temporarily unavailable. Complaint PDF download is offline right now.");
+    }
+
     const complaint = await Complaint.findById(req.params.id).lean();
     if (!complaint) {
       res.status(404);

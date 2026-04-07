@@ -16,6 +16,7 @@ function Footer() {
         <div className="flex flex-wrap gap-3 text-sm uppercase tracking-[0.2em] text-white/55">
           <Link to="/">Home</Link>
           <Link to="/check">Check</Link>
+          <Link to="/reputation">Reputation</Link>
           <Link to="/complaint">Complaint</Link>
           <Link to="/auth">Auth</Link>
         </div>

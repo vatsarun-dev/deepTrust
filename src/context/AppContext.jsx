@@ -7,6 +7,9 @@ export function AppProvider({ children }) {
   const [analysisResult, setAnalysisResult] = useState(null);
   const [complaintDraft, setComplaintDraft] = useState(null);
   const [lastComplaint, setLastComplaint] = useState(null);
+  const [defenseKit, setDefenseKit] = useState(null);
+  const [reputationReport, setReputationReport] = useState(null);
+  const [explanationMode, setExplanationMode] = useState("simple");
   const [user, setUserState] = useState(null);
   const [loading, setLoading] = useState(false);
 
@@ -44,12 +47,27 @@ export function AppProvider({ children }) {
       setComplaintDraft,
       lastComplaint,
       setLastComplaint,
+      defenseKit,
+      setDefenseKit,
+      reputationReport,
+      setReputationReport,
+      explanationMode,
+      setExplanationMode,
       user,
       setUser,
       loading,
       setLoading,
     }),
-    [analysisResult, complaintDraft, lastComplaint, user, loading]
+    [
+      analysisResult,
+      complaintDraft,
+      lastComplaint,
+      defenseKit,
+      reputationReport,
+      explanationMode,
+      user,
+      loading,
+    ]
   );
 
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>;

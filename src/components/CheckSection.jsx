@@ -2,6 +2,8 @@ import { useEffect, useRef, useState } from "react";
 import { useForm } from "react-hook-form";
 import { gsap } from "gsap";
 import { useAppContext } from "../context/AppContext.jsx";
+import ExplanationModeSwitcher from "./ExplanationModeSwitcher.jsx";
+import TruthBreakdown from "./TruthBreakdown.jsx";
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || "";
 
@@ -20,28 +22,17 @@ async function parseResponseJsonSafe(response) {
 
 function formatModelSource(source) {
   if (!source) return null;
-  if (source === "puter-js") return "Puter.js (GPT-5.4 Nano)";
-  if (source === "puter-js+gnews") return "Puter.js + GNews evidence";
+  if (source === "multi-layer") return "Multi-AI verification layer";
   if (source === "gnews") return "GNews evidence analysis";
   if (source === "sightengine") return "Sightengine image forensics";
-  if (source === "fallback") return "Local fallback analysis";
+  if (source === "fallback") return "Fallback analysis";
   return source;
 }
 
 function extractTextSourceLinks(sources) {
-  if (Array.isArray(sources)) {
-    return sources;
-  }
-  if (sources && Array.isArray(sources.text)) {
-    return sources.text;
-  }
+  if (Array.isArray(sources)) return sources;
+  if (sources && Array.isArray(sources.text)) return sources.text;
   return [];
-}
-
-function mapStatusToResult(status) {
-  if (status === "True" || status === "Likely True") return "Real";
-  if (status === "Unverified") return null;
-  return "Fake";
 }
 
 function toVerdictLabel(status, result) {
@@ -49,133 +40,56 @@ function toVerdictLabel(status, result) {
   if (result === "Fake" || status === "Fake" || status === "Misleading") {
     return "High manipulation risk";
   }
+  if (status === "AI Generated" || status === "Possibly AI Generated") {
+    return "Synthetic media risk";
+  }
   return "Likely authentic";
 }
 
 function getConfidenceColor(verdict) {
   const normalized = String(verdict || "").trim().toLowerCase();
 
-  if (normalized.includes("authentic") || normalized.includes("true")) {
-    return "#34d399";
-  }
-
-  if (
-    normalized.includes("fake") ||
-    normalized.includes("misleading") ||
-    normalized.includes("manipulation")
-  ) {
+  if (normalized.includes("authentic") || normalized.includes("true")) return "#34d399";
+  if (normalized.includes("fake") || normalized.includes("manipulation") || normalized.includes("synthetic")) {
     return "#f87171";
   }
-
   return "#fcd34d";
 }
 
-function normalizeStatus(rawStatus) {
-  const status = String(rawStatus || "").trim().toLowerCase();
-  if (status === "true") return "True";
-  if (status === "likely true") return "Likely True";
-  if (status === "misleading") return "Misleading";
-  if (status === "fake" || status === "false" || status === "likely false") return "Fake";
-  if (status === "unverified") return "Unverified";
-  return "Unverified";
-}
-
-function clampConfidence(value, fallback = 50) {
-  const num = Number(value);
-  if (!Number.isFinite(num)) return fallback;
-  return Math.max(0, Math.min(100, Math.round(num)));
-}
-
-function extractPuterText(raw) {
-  if (typeof raw === "string") return raw;
-  if (typeof raw?.text === "string") return raw.text;
-  if (typeof raw?.message?.content === "string") return raw.message.content;
-  if (Array.isArray(raw?.message?.content)) {
-    return raw.message.content
-      .map((part) => (typeof part?.text === "string" ? part.text : ""))
-      .join("")
-      .trim();
-  }
-  return String(raw || "");
-}
-
-function parsePuterJson(rawContent) {
-  const normalized = String(rawContent || "")
-    .replace(/^```json\s*/i, "")
-    .replace(/^```\s*/i, "")
-    .replace(/\s*```$/i, "")
-    .trim();
-
-  const start = normalized.indexOf("{");
-  const end = normalized.lastIndexOf("}");
-  const candidate =
-    start !== -1 && end !== -1 && end > start
-      ? normalized.slice(start, end + 1)
-      : normalized;
-
-  return JSON.parse(candidate);
-}
-
-function buildPuterPrompt(claim, articles) {
-  const articleBlock = articles.length
-    ? articles
-        .slice(0, 3)
-        .map(
-          (article, index) =>
-            `${index + 1}. ${(article.title || "Untitled").trim()} + ${(article.description || "No description").trim()}`
-        )
-        .join("\n")
-    : "No relevant news articles were found.";
-
+function buildEvidenceSummary(responseData, sourceLinks, hasText, hasImage) {
   return [
-    "User Claim:",
-    `"${claim}"`,
-    "",
-    "Relevant News Articles:",
-    "",
-    articleBlock,
-    "",
-    "Instructions:",
-    "* If relevant articles are present, prioritize them as evidence",
-    "* If no relevant articles exist, use reliable general world knowledge for common-sense and older claims",
-    '* If uncertain -> return "Unverified"',
-    "",
-    "Return STRICT JSON:",
-    "{",
-    '"status": "True / Likely True / Misleading / Fake / Unverified",',
-    '"confidence": number (0-100),',
-    '"explanation": "clear reasoning based on news evidence"',
-    "}",
-  ].join("\n");
-}
-
-async function analyzeTextWithPuter(claim, sources) {
-  const puterClient = window?.puter;
-  if (!puterClient?.ai?.chat) {
-    throw new Error("Puter SDK is not available");
-  }
-
-  const prompt = buildPuterPrompt(claim, sources);
-  const raw = await puterClient.ai.chat(prompt, { model: "gpt-5.4-nano" });
-  const rawText = extractPuterText(raw);
-  const parsed = parsePuterJson(rawText);
-
-  const status = normalizeStatus(parsed?.status);
-  return {
-    status,
-    result: mapStatusToResult(status),
-    confidence: clampConfidence(parsed?.confidence, 55),
-    explanation:
-      String(parsed?.explanation || "").trim() ||
-      "Client-side AI could not provide a full explanation from the available evidence.",
-  };
+    hasText ? "Claim intelligence activated." : "Text analysis skipped.",
+    hasImage ? "Synthetic media forensics activated." : "Image forensics skipped.",
+    responseData?.multiLayerVerification
+      ? `Final confidence ${responseData.multiLayerVerification.finalConfidence}% across AI + rule scoring.`
+      : null,
+    responseData?.impact
+      ? `Impact score ${responseData.impact.impactScore}/100 with ${responseData.impact.riskLevel} public harm risk.`
+      : null,
+    responseData?.emotionalRisk
+      ? `Emotional damage detector flagged ${responseData.emotionalRisk} emotional risk.`
+      : null,
+    sourceLinks.length ? `${sourceLinks.length} linked source(s) attached to the review.` : null,
+  ].filter(Boolean);
 }
 
 function CheckSection() {
   const sectionRef = useRef(null);
   const [localLoading, setLocalLoading] = useState(false);
+  const [traceLoading, setTraceLoading] = useState(false);
+  const [defenseLoading, setDefenseLoading] = useState(false);
   const [apiError, setApiError] = useState("");
-  const { analysisResult, setAnalysisResult, setLoading } = useAppContext();
+  const [imageTraceResult, setImageTraceResult] = useState(null);
+  const [lastImageFile, setLastImageFile] = useState(null);
+  const {
+    analysisResult,
+    setAnalysisResult,
+    defenseKit,
+    setDefenseKit,
+    explanationMode,
+    setExplanationMode,
+    setLoading,
+  } = useAppContext();
   const {
     register,
     handleSubmit,
@@ -210,6 +124,8 @@ function CheckSection() {
     setApiError("");
     setLocalLoading(true);
     setLoading(true);
+    setImageTraceResult(null);
+    setDefenseKit(null);
 
     try {
       const hasText = Boolean(data.text?.trim());
@@ -221,7 +137,12 @@ function CheckSection() {
       }
       if (hasImage) {
         formData.append("image", data.image[0]);
+        setLastImageFile(data.image[0]);
+      } else {
+        setLastImageFile(null);
       }
+
+      formData.append("explanationMode", explanationMode);
 
       const response = await fetch(`${API_BASE_URL}/api/analyze`, {
         method: "POST",
@@ -230,72 +151,34 @@ function CheckSection() {
 
       const responseData = await parseResponseJsonSafe(response);
       if (!response.ok) {
-        throw new Error(
-          responseData?.message ||
-            `Analysis request failed (${response.status}).`
-        );
+        throw new Error(responseData?.message || `Analysis request failed (${response.status}).`);
       }
       if (!responseData) {
         throw new Error("Backend returned an empty response.");
       }
 
       const sourceLinks = extractTextSourceLinks(responseData.sources);
-      let finalStatus = responseData.status || "Unverified";
-      let finalResult = responseData.result ?? mapStatusToResult(finalStatus);
-      let finalConfidence = clampConfidence(responseData.confidence, 50);
-      let finalExplanation =
-        String(responseData.explanation || "").trim() || "Unable to build an explanation from backend response.";
-      let finalSource = responseData.source || null;
-      let puterNote = null;
-
-      if (hasText) {
-        try {
-          const puterResult = await analyzeTextWithPuter(data.text.trim(), sourceLinks);
-
-          if (!hasImage) {
-            finalStatus = puterResult.status;
-            finalResult = puterResult.result;
-            finalConfidence = puterResult.confidence;
-            finalExplanation = puterResult.explanation;
-            finalSource = sourceLinks.length ? "puter-js+gnews" : "puter-js";
-          } else {
-            puterNote = `Client text reasoning (Puter.js): ${puterResult.explanation}`;
-            finalSource = `${responseData.source || "backend"} + puter-js`;
-          }
-        } catch (puterError) {
-          puterNote = `Client AI reasoning unavailable: ${puterError.message}`;
-        }
-      }
-
-      const sourceSummary = {
-        text: sourceLinks.length
-          ? `${sourceLinks.length} linked article(s)`
-          : finalSource === "puter-js"
-            ? "general knowledge fallback"
-            : "n/a",
-        image: hasImage ? responseData.source || "sightengine" : "n/a",
-      };
+      const verdict = toVerdictLabel(responseData.status, responseData.result);
 
       setAnalysisResult({
-        verdict: toVerdictLabel(finalStatus, finalResult),
-        confidence: finalConfidence,
-        summary: finalExplanation,
-        source: finalSource,
-        sources: sourceSummary,
+        claimText: data.text?.trim() || "",
+        status: responseData.status,
+        result: responseData.result,
+        verdict,
+        confidence:
+          responseData?.multiLayerVerification?.finalConfidence ?? Number(responseData.confidence || 50),
+        summary: String(responseData.explanation || "").trim(),
+        source: responseData.source,
         sourceLinks,
-        evidence: [
-          hasText
-            ? sourceLinks.length
-              ? "Text analysis completed using GNews evidence + Puter.js reasoning."
-              : "Text analysis completed using Puter.js general-knowledge fallback (no matching GNews links)."
-            : "No text was provided, so language analysis was skipped.",
-          hasImage
-            ? "Image inspection completed using backend media forensics."
-            : "No image was uploaded, so media forensics were skipped.",
-          `Backend status: ${responseData.status || "n/a"} with ${clampConfidence(responseData.confidence, 0)}% confidence.`,
-          puterNote,
-          finalSource ? `Primary model source: ${formatModelSource(finalSource)}.` : null,
-        ],
+        sources: responseData.sources,
+        evidence: buildEvidenceSummary(responseData, sourceLinks, hasText, hasImage),
+        truthBreakdown: responseData.truthBreakdown,
+        impact: responseData.impact,
+        emotionalRisk: responseData.emotionalRisk,
+        emotionalSignals: responseData.emotionalSignals || [],
+        explanationModes: responseData.explanationModes || {},
+        multiLayerVerification: responseData.multiLayerVerification,
+        hasImage,
       });
 
       reset();
@@ -308,23 +191,86 @@ function CheckSection() {
     }
   };
 
+  const handleImageTrace = async () => {
+    if (!lastImageFile) return;
+
+    setTraceLoading(true);
+    setApiError("");
+
+    try {
+      const formData = new FormData();
+      formData.append("image", lastImageFile);
+      formData.append("hint", analysisResult?.claimText || "");
+
+      const response = await fetch(`${API_BASE_URL}/api/image-trace`, {
+        method: "POST",
+        body: formData,
+      });
+
+      const result = await parseResponseJsonSafe(response);
+      if (!response.ok) {
+        throw new Error(result?.message || "Reverse image trace failed.");
+      }
+
+      setImageTraceResult(result);
+    } catch (error) {
+      setApiError(error.message || "Reverse image trace failed.");
+    } finally {
+      setTraceLoading(false);
+    }
+  };
+
+  const handleDefenseKit = async () => {
+    if (!analysisResult) return;
+
+    setDefenseLoading(true);
+    setApiError("");
+
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/defense-kit`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          claim: analysisResult.claimText,
+          explanation: analysisResult.summary,
+          verdict: analysisResult.status || analysisResult.verdict,
+          sourceLinks: analysisResult.sourceLinks,
+        }),
+      });
+
+      const result = await parseResponseJsonSafe(response);
+      if (!response.ok) {
+        throw new Error(result?.message || "Defense kit generation failed.");
+      }
+
+      setDefenseKit(result);
+    } catch (error) {
+      setApiError(error.message || "Defense kit generation failed.");
+    } finally {
+      setDefenseLoading(false);
+    }
+  };
+
   return (
     <section ref={sectionRef} className="dt-section">
       <div className="grid gap-8 lg:grid-cols-[0.9fr_1.1fr]">
         <div className="space-y-5">
           <p className="check-fade text-sm uppercase tracking-[0.35em] text-[var(--accent)]">
-            Instant Verification
+            Verification Command Center
           </p>
           <h2 className="check-fade text-4xl font-semibold uppercase leading-tight md:text-6xl">
-            Check suspicious text or media before it spreads.
+            Check suspicious text or media with layered intelligence, not a single verdict.
           </h2>
           <p className="check-fade max-w-xl text-base leading-8 text-white/65">
-            Text verification now uses GNews evidence from the backend plus client-side
-            reasoning with Puter.js. Image forensics still run through the backend.
+            DeepTrust now combines evidence matching, emotional harm detection, impact scoring,
+            truth decomposition, reverse trace support, and defense-kit generation in one flow.
           </p>
+          <div className="check-fade">
+            <ExplanationModeSwitcher value={explanationMode} onChange={setExplanationMode} />
+          </div>
         </div>
 
-        <div className="grid gap-6 lg:grid-cols-[1fr_0.9fr]">
+        <div className="grid gap-6">
           <form
             onSubmit={handleSubmit(onSubmit)}
             className="check-fade rounded-[2rem] border border-white/10 bg-white/5 p-6"
@@ -344,8 +290,7 @@ function CheckSection() {
                   if (!hasText && !hasImage) {
                     return "Add suspicious text or upload an image to analyze.";
                   }
-
-                  if (hasText && value.trim().length < 24) {
+                  if (hasText && value.trim().length < 18) {
                     return "Add a little more context so the detector has signal.";
                   }
 
@@ -353,9 +298,7 @@ function CheckSection() {
                 },
               })}
             />
-            {errors.text ? (
-              <p className="mb-4 text-sm text-[var(--accent)]">{errors.text.message}</p>
-            ) : null}
+            {errors.text ? <p className="mb-4 text-sm text-[var(--accent)]">{errors.text.message}</p> : null}
 
             <label className="mb-3 block text-sm uppercase tracking-[0.25em] text-white/55">
               Upload Image
@@ -372,17 +315,12 @@ function CheckSection() {
                   if (!hasText && !hasImage) {
                     return "Add suspicious text or upload an image to analyze.";
                   }
-
                   return true;
                 },
               })}
             />
-            {errors.image ? (
-              <p className="mb-4 text-sm text-[var(--accent)]">{errors.image.message}</p>
-            ) : null}
-            {apiError ? (
-              <p className="mb-4 text-sm text-[var(--accent)]">{apiError}</p>
-            ) : null}
+            {errors.image ? <p className="mb-4 text-sm text-[var(--accent)]">{errors.image.message}</p> : null}
+            {apiError ? <p className="mb-4 text-sm text-[var(--accent)]">{apiError}</p> : null}
 
             <button type="submit" className="dt-button w-full">
               {localLoading ? "Analyzing Signal..." : "Start Analysis"}
@@ -394,41 +332,73 @@ function CheckSection() {
               Result
             </p>
             {analysisResult ? (
-              <div className="space-y-4">
-                <div>
-                  <p className="text-sm text-white/45">Verdict</p>
-                  <h3 className="text-2xl font-semibold uppercase text-white">
-                    {analysisResult.verdict}
-                  </h3>
+              <div className="space-y-5">
+                <div className="grid gap-4 md:grid-cols-[0.7fr_0.3fr]">
+                  <div>
+                    <p className="text-sm text-white/45">Verdict</p>
+                    <h3 className="text-2xl font-semibold uppercase text-white">
+                      {analysisResult.verdict}
+                    </h3>
+                    <p className="mt-3 text-sm leading-7 text-white/68">{analysisResult.summary}</p>
+                  </div>
+                  <div>
+                    <p className="text-sm text-white/45">Confidence</p>
+                    <p
+                      className="text-5xl font-semibold"
+                      style={{ color: getConfidenceColor(analysisResult.verdict) }}
+                    >
+                      {analysisResult.confidence}%
+                    </p>
+                  </div>
                 </div>
-                <div>
-                  <p className="text-sm text-white/45">Confidence</p>
-                  <p
-                    className="text-5xl font-semibold"
-                    style={{ color: getConfidenceColor(analysisResult.verdict) }}
-                  >
-                    {analysisResult.confidence}%
-                  </p>
+
+                <div className="grid gap-3 md:grid-cols-3">
+                  <div className="rounded-[1.25rem] border border-white/10 bg-black/20 p-4">
+                    <p className="text-xs uppercase tracking-[0.24em] text-white/42">Impact Score</p>
+                    <p className="mt-2 text-3xl font-semibold text-white">
+                      {analysisResult.impact?.impactScore ?? "--"}
+                    </p>
+                    <p className="mt-2 text-xs uppercase tracking-[0.22em] text-white/55">
+                      {analysisResult.impact?.riskLevel || "n/a"} Risk
+                    </p>
+                  </div>
+                  <div className="rounded-[1.25rem] border border-white/10 bg-black/20 p-4">
+                    <p className="text-xs uppercase tracking-[0.24em] text-white/42">Emotional Damage</p>
+                    <p className="mt-2 text-3xl font-semibold text-white">
+                      {analysisResult.emotionalRisk || "Low"}
+                    </p>
+                    <p className="mt-2 text-xs text-white/55">
+                      {analysisResult.emotionalSignals?.length
+                        ? analysisResult.emotionalSignals.join(", ")
+                        : "No acute emotional harm signals."}
+                    </p>
+                  </div>
+                  <div className="rounded-[1.25rem] border border-white/10 bg-black/20 p-4">
+                    <p className="text-xs uppercase tracking-[0.24em] text-white/42">Verification Layer</p>
+                    <p className="mt-2 text-3xl font-semibold text-white">
+                      {analysisResult.multiLayerVerification?.finalConfidence ?? "--"}
+                    </p>
+                    <p className="mt-2 text-xs text-white/55">
+                      AI {analysisResult.multiLayerVerification?.aiConfidence ?? "--"} | Rules{" "}
+                      {analysisResult.multiLayerVerification?.ruleScore ?? "--"}
+                    </p>
+                  </div>
                 </div>
+
                 {analysisResult.source ? (
                   <div>
-                    <p className="text-sm text-white/45">Analysis Source</p>
+                    <p className="text-sm text-white/45">Primary Source</p>
                     <p className="text-sm uppercase tracking-[0.24em] text-white/72">
                       {formatModelSource(analysisResult.source)}
                     </p>
                   </div>
                 ) : null}
-                {analysisResult.sources ? (
-                  <div>
-                    <p className="text-sm text-white/45">Analysis Sources</p>
-                    <p className="text-sm uppercase tracking-[0.24em] text-white/72">
-                      Text: {analysisResult.sources.text || "n/a"} | Image:{" "}
-                      {analysisResult.sources.image || "n/a"}
-                    </p>
-                  </div>
-                ) : null}
+
+                <TruthBreakdown breakdown={analysisResult.truthBreakdown} />
+
                 {analysisResult.sourceLinks?.length ? (
                   <div className="space-y-2">
+                    <p className="text-sm uppercase tracking-[0.24em] text-white/45">Linked Evidence</p>
                     {analysisResult.sourceLinks.map((link) => (
                       <a
                         key={link.url}
@@ -442,9 +412,9 @@ function CheckSection() {
                     ))}
                   </div>
                 ) : null}
-                <p className="text-sm leading-7 text-white/68">{analysisResult.summary}</p>
+
                 <div className="space-y-3">
-                  {analysisResult.evidence.filter(Boolean).map((item) => (
+                  {analysisResult.evidence.map((item) => (
                     <div
                       key={item}
                       className="rounded-[1.25rem] border border-white/10 bg-black/20 px-4 py-3 text-sm leading-6 text-white/68"
@@ -453,12 +423,61 @@ function CheckSection() {
                     </div>
                   ))}
                 </div>
+
+                <div className="flex flex-wrap gap-3">
+                  <button type="button" className="dt-button" onClick={handleDefenseKit}>
+                    {defenseLoading ? "Generating..." : "Generate Defense Kit"}
+                  </button>
+                  {analysisResult.hasImage ? (
+                    <button type="button" className="dt-button-muted" onClick={handleImageTrace}>
+                      {traceLoading ? "Tracing..." : "Reverse Image Trace"}
+                    </button>
+                  ) : null}
+                </div>
+
+                {defenseKit ? (
+                  <div className="space-y-3 rounded-[1.5rem] border border-white/10 bg-black/20 p-5">
+                    <p className="text-xs uppercase tracking-[0.24em] text-white/42">Auto Defense Kit</p>
+                    <p className="text-sm leading-7 text-white/74">{defenseKit.evidenceSummary}</p>
+                    <p className="rounded-[1rem] border border-white/10 bg-white/5 p-4 text-sm leading-7 text-white/78">
+                      {defenseKit.complaintText}
+                    </p>
+                    <div className="space-y-2 text-sm text-white/72">
+                      {defenseKit.actions?.map((item, index) => (
+                        <p key={`${item}-${index}`}>{index + 1}. {item}</p>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
+
+                {imageTraceResult ? (
+                  <div className="space-y-3 rounded-[1.5rem] border border-white/10 bg-black/20 p-5">
+                    <p className="text-xs uppercase tracking-[0.24em] text-white/42">Reverse Image Trace</p>
+                    <p className="text-sm leading-7 text-white/68">{imageTraceResult.note}</p>
+                    <p className="text-xs uppercase tracking-[0.22em] text-white/55">
+                      Keywords: {imageTraceResult.keywords?.join(", ")}
+                    </p>
+                    <div className="space-y-2">
+                      {imageTraceResult.similarResults?.map((item) => (
+                        <a
+                          key={item.url}
+                          href={item.url}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="block rounded-[1rem] border border-white/10 bg-white/5 px-4 py-3 text-sm text-white/75"
+                        >
+                          {item.title || item.url}
+                        </a>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
               </div>
             ) : (
               <div className="flex h-full min-h-[300px] items-end rounded-[1.5rem] bg-[radial-gradient(circle_at_top,_rgba(255,59,59,0.22),_transparent_30%),linear-gradient(180deg,_rgba(255,255,255,0.02),_rgba(255,255,255,0.01))] p-5">
                 <p className="max-w-xs text-sm leading-7 text-white/55">
-                  Your analysis result appears here with a confidence score,
-                  summary, and evidence trail once the live analysis finishes.
+                  Your analysis cockpit appears here with verdict, impact score, truth breakdown,
+                  defense kit, and reverse-trace outputs once verification finishes.
                 </p>
               </div>
             )}

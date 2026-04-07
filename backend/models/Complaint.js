@@ -33,6 +33,16 @@ const complaintSchema = new mongoose.Schema(
       trim: true,
       default: "Medium",
     },
+    priority: {
+      type: String,
+      trim: true,
+      default: "Standard",
+    },
+    emotionalRisk: {
+      type: String,
+      trim: true,
+      default: "Low",
+    },
     aiComplaint: {
       title: { type: String, trim: true, default: "" },
       body: { type: String, trim: true, default: "" },

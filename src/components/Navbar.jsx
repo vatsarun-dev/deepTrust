@@ -5,6 +5,7 @@ import { useAppContext } from "../context/AppContext.jsx";
 const navItems = [
   { label: "Story", href: "/" },
   { label: "Check", href: "/check" },
+  { label: "Reputation", href: "/reputation" },
   { label: "Complaint", href: "/complaint" },
   { label: "Auth", href: "/auth" },
 ];
