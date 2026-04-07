@@ -1,5 +1,6 @@
 const crypto = require("crypto");
 const User = require("../models/User");
+const { isDatabaseReady } = require("../config/db");
 
 const PASSWORD_KEYLEN = 64;
 
@@ -40,8 +41,19 @@ function formatUser(user) {
   };
 }
 
+function ensureDatabaseConnection(res) {
+  if (!isDatabaseReady()) {
+    res.status(503);
+    throw new Error(
+      "Database is not connected. Check Atlas network access or MONGO_URI, then try again."
+    );
+  }
+}
+
 async function signup(req, res, next) {
   try {
+    ensureDatabaseConnection(res);
+
     const name = String(req.body.name || "").trim();
     const email = normalizeEmail(req.body.email);
     const password = String(req.body.password || "");
@@ -81,6 +93,8 @@ async function signup(req, res, next) {
 
 async function login(req, res, next) {
   try {
+    ensureDatabaseConnection(res);
+
     const email = normalizeEmail(req.body.email);
     const password = String(req.body.password || "");
 
