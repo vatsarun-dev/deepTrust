@@ -3,6 +3,14 @@ const FormData = require("form-data");
 const dotenv = require("dotenv");
 const fs = require("fs/promises");
 const path = require("path");
+const {
+  buildImpactScore,
+  buildTruthBreakdown,
+  buildEmotionalRisk,
+  buildMultiAiVerification,
+  buildExplanationModes,
+  pickExplanationMode,
+} = require("./intelligenceService");
 
 const SIGHTENGINE_API_URL = "https://api.sightengine.com/1.0/check.json";
 let cachedFallbackCreds = null;
@@ -198,7 +206,43 @@ async function normalizeImageInput(input) {
   return null;
 }
 
-async function analyzeImage(input) {
+function enrichImageResult(result, options = {}) {
+  if (!result) return null;
+
+  const contextText = String(options.contextText || "uploaded image");
+  const impact = buildImpactScore(contextText);
+  const emotional = buildEmotionalRisk(contextText);
+  const truthBreakdown = buildTruthBreakdown({
+    claim: contextText,
+    status: result.status,
+    explanation: result.explanation,
+    sources: [],
+  });
+  const explanationModes = buildExplanationModes({
+    claim: contextText,
+    explanation: result.explanation,
+    truthBreakdown,
+    impact,
+    emotionalRisk: emotional,
+  });
+  const multiLayerVerification = buildMultiAiVerification({
+    imageResult: result,
+    sourceMatch: "weak",
+  });
+
+  return {
+    ...result,
+    explanation: pickExplanationMode(explanationModes, options.mode),
+    explanationModes,
+    truthBreakdown,
+    impact,
+    emotionalRisk: emotional.emotionalRisk,
+    emotionalSignals: emotional.categories,
+    multiLayerVerification,
+  };
+}
+
+async function analyzeImage(input, options = {}) {
   const file = await normalizeImageInput(input);
   if (!file || !file.buffer) return null;
 
@@ -212,7 +256,7 @@ async function analyzeImage(input) {
       `[DEBUG][IMAGE] Hard decision from Sightengine -> ai_score=${aiScore}, status="${status}", confidence=${confidence}`
     );
 
-    return {
+    return enrichImageResult({
       status,
       result,
       confidence,
@@ -220,10 +264,10 @@ async function analyzeImage(input) {
       details: { ai_score: aiScore },
       source: "sightengine",
       sources: [],
-    };
+    }, options);
   } catch (error) {
     console.warn(`Sightengine failed, returning safe fallback: ${error.message}`);
-    return {
+    return enrichImageResult({
       status: "Analysis Unavailable",
       result: null,
       confidence: 50,
@@ -233,7 +277,7 @@ async function analyzeImage(input) {
       details: { ai_score: null },
       source: "fallback",
       sources: [],
-    };
+    }, options);
   }
 }
 

@@ -7,7 +7,10 @@ async function checkImage(req, res, next) {
       throw new Error("Image file is required.");
     }
 
-    const result = await analyzeImage(req.file);
+    const result = await analyzeImage(req.file, {
+      mode: req.body?.explanationMode,
+      contextText: req.body?.text,
+    });
     res.status(200).json(result);
   } catch (error) {
     next(error);

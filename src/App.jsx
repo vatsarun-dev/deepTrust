@@ -5,6 +5,7 @@ import Home from "./pages/Home.jsx";
 import CheckPage from "./pages/CheckPage.jsx";
 import ComplaintPage from "./pages/ComplaintPage.jsx";
 import AuthPage from "./pages/AuthPage.jsx";
+import ReputationPage from "./pages/ReputationPage.jsx";
 
 function App() {
   return (
@@ -14,6 +15,7 @@ function App() {
       <Routes>
         <Route path="/" element={<Home />} />
         <Route path="/check" element={<CheckPage />} />
+        <Route path="/reputation" element={<ReputationPage />} />
         <Route path="/complaint" element={<ComplaintPage />} />
         <Route path="/auth" element={<AuthPage />} />
       </Routes>

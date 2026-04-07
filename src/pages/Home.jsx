@@ -5,6 +5,9 @@ import RealitySection from "../components/RealitySection.jsx";
 import SolutionSection from "../components/SolutionSection.jsx";
 import CheckSection from "../components/CheckSection.jsx";
 import ComplaintSection from "../components/ComplaintSection.jsx";
+import TrendingFakeSection from "../components/TrendingFakeSection.jsx";
+import SimulatorSection from "../components/SimulatorSection.jsx";
+import ReputationProtectorSection from "../components/ReputationProtectorSection.jsx";
 
 function Home() {
   return (
@@ -14,7 +17,10 @@ function Home() {
       <ControlSection />
       <RealitySection />
       <SolutionSection />
+      <TrendingFakeSection />
       <CheckSection />
+      <SimulatorSection />
+      <ReputationProtectorSection />
       <ComplaintSection />
     </main>
   );

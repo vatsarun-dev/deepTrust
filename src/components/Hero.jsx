@@ -65,14 +65,14 @@ function Hero() {
       >
         <div className="max-w-4xl text-center">
           <p className="mb-5 text-[0.72rem] uppercase tracking-[0.5em] text-white/68">
-            AI Fake News And Media Verification Platform
+            Intelligent AI Trust Ecosystem
           </p>
           <h2 className="mx-auto max-w-4xl text-3xl font-semibold uppercase leading-[1.02] text-white md:text-5xl lg:text-6xl">
-            Manipulated stories move first. Truth needs time to answer back.
+            Verify claims, trace synthetic media, defend reputations, and respond before a lie hardens.
           </h2>
           <p className="mx-auto mt-6 max-w-2xl text-sm leading-7 text-white/65 md:text-base">
-            DeepTrust helps people inspect suspicious narratives and synthetic
-            media before they harden into public belief.
+            DeepTrust now acts like a live digital trust command center: detecting, explaining,
+            prioritizing harm, and turning evidence into action.
           </p>
           <div className="flex flex-col gap-3 sm:flex-row">
             <Link to="/check" className="dt-button">

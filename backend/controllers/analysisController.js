@@ -1,8 +1,16 @@
 const fs = require("fs/promises");
 const { analyzeFakeNews } = require("../services/fakeNewsService");
 const { analyzeImage } = require("../services/imageDetectionService");
+const {
+  buildImpactScore,
+  buildTruthBreakdown,
+  buildEmotionalRisk,
+  buildMultiAiVerification,
+  buildExplanationModes,
+  pickExplanationMode,
+} = require("../services/intelligenceService");
 
-function mergeResults(textResult, imageResult) {
+function mergeResults(textResult, imageResult, explanationMode, claimText) {
   const availableResults = [textResult, imageResult].filter(Boolean);
 
   if (!availableResults.length) {
@@ -38,6 +46,12 @@ function mergeResults(textResult, imageResult) {
           ? single.sources
           : defaultSources,
       source: single.source,
+      truthBreakdown: single.truthBreakdown,
+      impact: single.impact,
+      emotionalRisk: single.emotionalRisk,
+      emotionalSignals: single.emotionalSignals,
+      explanationModes: single.explanationModes,
+      multiLayerVerification: single.multiLayerVerification,
     };
   }
 
@@ -45,17 +59,46 @@ function mergeResults(textResult, imageResult) {
   const averageConfidence = Math.round(
     availableResults.reduce((sum, item) => sum + item.confidence, 0) / availableResults.length
   );
+  const impact = buildImpactScore(claimText);
+  const emotional = buildEmotionalRisk(
+    `${claimText || ""} ${textResult?.explanation || ""} ${imageResult?.explanation || ""}`
+  );
+  const truthBreakdown = buildTruthBreakdown({
+    claim: claimText,
+    status: fakeVotes.length > 0 ? "Misleading" : "Likely True",
+    explanation: `${textResult?.explanation || ""} ${imageResult?.explanation || ""}`.trim(),
+    sources: textResult?.sources || [],
+  });
+  const explanationModes = buildExplanationModes({
+    claim: claimText,
+    explanation: `${textResult?.explanation || ""} ${imageResult?.explanation || ""}`.trim(),
+    truthBreakdown,
+    impact,
+    emotionalRisk: emotional,
+  });
+  const multiLayerVerification = buildMultiAiVerification({
+    textResult,
+    imageResult,
+    sourceMatch: textResult?.source_match,
+  });
 
   return {
     status: fakeVotes.length > 0 ? "Misleading" : "Likely True",
     result: fakeVotes.length > 0 ? "Fake" : "Real",
-    confidence: averageConfidence,
-    explanation: `${textResult?.explanation || ""} ${imageResult?.explanation || ""}`.trim(),
+    confidence: multiLayerVerification.finalConfidence || averageConfidence,
+    explanation: pickExplanationMode(explanationModes, explanationMode),
     source_match: textResult ? textResult.source_match || null : null,
     sources: {
       text: textResult ? textResult.sources || [] : [],
       image: imageResult ? imageResult.source : null,
     },
+    source: "multi-layer",
+    truthBreakdown,
+    impact,
+    emotionalRisk: emotional.emotionalRisk,
+    emotionalSignals: emotional.categories,
+    explanationModes,
+    multiLayerVerification,
   };
 }
 
@@ -63,7 +106,7 @@ async function analyzeContent(req, res, next) {
   let uploadedFilePath = null;
 
   try {
-    const { text } = req.body;
+    const { text, explanationMode } = req.body;
     uploadedFilePath = req.file ? req.file.path : null;
 
     if ((!text || !String(text).trim()) && !uploadedFilePath) {
@@ -72,11 +115,11 @@ async function analyzeContent(req, res, next) {
     }
 
     const [textResult, imageResult] = await Promise.all([
-      analyzeFakeNews(text),
-      analyzeImage(uploadedFilePath),
+      analyzeFakeNews(text, { mode: explanationMode }),
+      analyzeImage(uploadedFilePath, { mode: explanationMode, contextText: text }),
     ]);
 
-    const mergedResult = mergeResults(textResult, imageResult);
+    const mergedResult = mergeResults(textResult, imageResult, explanationMode, text);
 
     res.status(200).json(mergedResult);
   } catch (error) {
