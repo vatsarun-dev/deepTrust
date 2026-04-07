@@ -136,9 +136,9 @@ function buildPuterPrompt(claim, articles) {
     articleBlock,
     "",
     "Instructions:",
-    "* Analyze the claim based ONLY on the provided news articles",
-    "* Do NOT assume facts beyond given data",
-    '* If no strong evidence exists -> return "Unverified"',
+    "* If relevant articles are present, prioritize them as evidence",
+    "* If no relevant articles exist, use reliable general world knowledge for common-sense and older claims",
+    '* If uncertain -> return "Unverified"',
     "",
     "Return STRICT JSON:",
     "{",
@@ -249,31 +249,30 @@ function CheckSection() {
       let puterNote = null;
 
       if (hasText) {
-        if (!sourceLinks.length) {
-          puterNote =
-            "Client AI reasoning skipped because GNews returned no evidence for this claim.";
-        } else {
-          try {
-            const puterResult = await analyzeTextWithPuter(data.text.trim(), sourceLinks);
+        try {
+          const puterResult = await analyzeTextWithPuter(data.text.trim(), sourceLinks);
 
-            if (!hasImage) {
-              finalStatus = puterResult.status;
-              finalResult = puterResult.result;
-              finalConfidence = puterResult.confidence;
-              finalExplanation = puterResult.explanation;
-            } else {
-              puterNote = `Client text reasoning (Puter.js): ${puterResult.explanation}`;
-            }
-
-            finalSource = hasImage ? `${responseData.source || "backend"} + puter-js` : "puter-js+gnews";
-          } catch (puterError) {
-            puterNote = `Client AI reasoning unavailable: ${puterError.message}`;
+          if (!hasImage) {
+            finalStatus = puterResult.status;
+            finalResult = puterResult.result;
+            finalConfidence = puterResult.confidence;
+            finalExplanation = puterResult.explanation;
+            finalSource = sourceLinks.length ? "puter-js+gnews" : "puter-js";
+          } else {
+            puterNote = `Client text reasoning (Puter.js): ${puterResult.explanation}`;
+            finalSource = `${responseData.source || "backend"} + puter-js`;
           }
+        } catch (puterError) {
+          puterNote = `Client AI reasoning unavailable: ${puterError.message}`;
         }
       }
 
       const sourceSummary = {
-        text: sourceLinks.length ? `${sourceLinks.length} linked article(s)` : "n/a",
+        text: sourceLinks.length
+          ? `${sourceLinks.length} linked article(s)`
+          : finalSource === "puter-js"
+            ? "general knowledge fallback"
+            : "n/a",
         image: hasImage ? responseData.source || "sightengine" : "n/a",
       };
 
@@ -286,7 +285,9 @@ function CheckSection() {
         sourceLinks,
         evidence: [
           hasText
-            ? "Text analysis completed using GNews evidence + Puter.js reasoning."
+            ? sourceLinks.length
+              ? "Text analysis completed using GNews evidence + Puter.js reasoning."
+              : "Text analysis completed using Puter.js general-knowledge fallback (no matching GNews links)."
             : "No text was provided, so language analysis was skipped.",
           hasImage
             ? "Image inspection completed using backend media forensics."

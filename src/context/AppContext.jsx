@@ -5,6 +5,8 @@ const USER_STORAGE_KEY = "deeptrust_user";
 
 export function AppProvider({ children }) {
   const [analysisResult, setAnalysisResult] = useState(null);
+  const [complaintDraft, setComplaintDraft] = useState(null);
+  const [lastComplaint, setLastComplaint] = useState(null);
   const [user, setUserState] = useState(null);
   const [loading, setLoading] = useState(false);
 
@@ -38,12 +40,16 @@ export function AppProvider({ children }) {
     () => ({
       analysisResult,
       setAnalysisResult,
+      complaintDraft,
+      setComplaintDraft,
+      lastComplaint,
+      setLastComplaint,
       user,
       setUser,
       loading,
       setLoading,
     }),
-    [analysisResult, user, loading]
+    [analysisResult, complaintDraft, lastComplaint, user, loading]
   );
 
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>;
