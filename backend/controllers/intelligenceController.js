@@ -5,6 +5,8 @@ const {
   buildTruthBreakdown,
   buildEmotionalRisk,
   buildComplaintPriority,
+  buildReputationBadge,
+  clampScore,
 } = require("../services/intelligenceService");
 const { fetchTrendingFakes } = require("../services/trendService");
 const { traceImage } = require("../services/imageTraceService");
@@ -94,13 +96,27 @@ async function reputationCheck(req, res, next) {
     const profile = await ReputationProfile.findOneAndUpdate(
       { normalizedName },
       {
-        name,
-        normalizedName,
-        referenceImageName: req.file?.originalname || "",
-        notes,
+        $set: {
+          name,
+          normalizedName,
+          email: normalizeText(req.body.email).toLowerCase(),
+          referenceImageName: req.file?.originalname || "",
+          notes,
+        },
+        $setOnInsert: {
+          reputationScore: 50,
+          badge: "Neutral",
+          totalComplaints: 0,
+          correctComplaints: 0,
+          incorrectComplaints: 0,
+        },
       },
       { upsert: true, new: true, setDefaultsOnInsert: true }
     );
+
+    profile.reputationScore = clampScore(profile.reputationScore ?? 50, 50);
+    profile.badge = buildReputationBadge(profile.reputationScore);
+    await profile.save();
 
     const mentionedByName = contentText.toLowerCase().includes(normalizedName);
     const impact = buildImpactScore(`${name} ${contentText}`);
@@ -116,6 +132,11 @@ async function reputationCheck(req, res, next) {
       summary: mentionedByName
         ? `${name} appears directly inside the checked content.`
         : `${name} was stored for future checks; no direct name match was found in this submission.`,
+      reputationScore: profile.reputationScore,
+      badge: profile.badge,
+      totalComplaints: profile.totalComplaints,
+      correctComplaints: profile.correctComplaints,
+      incorrectComplaints: profile.incorrectComplaints,
     });
   } catch (error) {
     next(error);

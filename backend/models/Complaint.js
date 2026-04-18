@@ -54,6 +54,15 @@ const complaintSchema = new mongoose.Schema(
         trim: true,
       },
     ],
+    analysisSnapshot: {
+      trustScore: { type: Number, default: null },
+      trustLabel: { type: String, trim: true, default: "" },
+      verdict: { type: String, trim: true, default: "" },
+    },
+    reputationDelta: {
+      type: Number,
+      default: 0,
+    },
     evidence: [
       {
         sourceType: { type: String, trim: true, default: "file" },

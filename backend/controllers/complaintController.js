@@ -1,11 +1,14 @@
 const fs = require("fs/promises");
 const Complaint = require("../models/Complaint");
+const ReputationProfile = require("../models/ReputationProfile");
 const { isDatabaseReady } = require("../config/db");
 const { buildComplaintDraft, classifyByKeywords } = require("../services/complaintAIService");
 const {
   buildImpactScore,
   buildEmotionalRisk,
   buildComplaintPriority,
+  buildReputationBadge,
+  clampScore,
 } = require("../services/intelligenceService");
 
 function normalizeText(value) {
@@ -47,6 +50,75 @@ function flattenLines(text, lineWidth = 90) {
 
   if (line) lines.push(line);
   return lines;
+}
+
+function isLikelyFakeAnalysis(snapshot) {
+  if (!snapshot || typeof snapshot !== "object") {
+    return null;
+  }
+
+  const trustScore = Number(snapshot.trustScore);
+  const trustLabel = normalizeText(snapshot.trustLabel).toLowerCase();
+  const verdict = normalizeText(snapshot.verdict).toLowerCase();
+
+  if (Number.isFinite(trustScore)) {
+    return trustScore < 40;
+  }
+
+  return (
+    trustLabel === "likely fake" ||
+    trustLabel === "suspicious" ||
+    verdict.includes("fake") ||
+    verdict.includes("misleading") ||
+    verdict.includes("manipulation")
+  );
+}
+
+async function updateReporterReputation({ name, email, analysisSnapshot }) {
+  const normalizedName = normalizeText(name).toLowerCase();
+  if (!normalizedName) {
+    return null;
+  }
+
+  const verdictMatchesComplaint = isLikelyFakeAnalysis(analysisSnapshot);
+
+  let profile = await ReputationProfile.findOne({ normalizedName });
+  if (!profile) {
+    profile = new ReputationProfile({
+      name,
+      normalizedName,
+      email: normalizeText(email).toLowerCase(),
+    });
+  }
+
+  if (email) {
+    profile.email = normalizeText(email).toLowerCase();
+  }
+
+  let reputationDelta = 0;
+  if (verdictMatchesComplaint === true) {
+    reputationDelta = 8;
+    profile.correctComplaints += 1;
+  } else if (verdictMatchesComplaint === false) {
+    reputationDelta = -10;
+    profile.incorrectComplaints += 1;
+  }
+
+  if (verdictMatchesComplaint !== null) {
+    profile.totalComplaints += 1;
+    profile.reputationScore = clampScore((profile.reputationScore ?? 50) + reputationDelta, 50);
+  } else {
+    profile.reputationScore = clampScore(profile.reputationScore ?? 50, 50);
+  }
+
+  profile.badge = buildReputationBadge(profile.reputationScore);
+  await profile.save();
+
+  return {
+    profile,
+    reputationDelta,
+    complaintAligned: verdictMatchesComplaint,
+  };
 }
 
 function buildSimplePdfBuffer(lines) {
@@ -187,6 +259,7 @@ async function submitComplaint(req, res, next) {
     const impact = buildImpactScore(description);
     const emotional = buildEmotionalRisk(description);
     const priority = buildComplaintPriority(emotional.emotionalRisk, impact);
+    const analysisSnapshot = parseJsonField(req.body.analysisSnapshot, {});
 
     const generated = await buildComplaintDraft({
       issueType,
@@ -208,8 +281,26 @@ async function submitComplaint(req, res, next) {
       emotionalRisk: emotional.emotionalRisk,
       aiComplaint: generated.draft,
       recommendations: generated.recommendedActions || [],
+      analysisSnapshot: {
+        trustScore: Number.isFinite(Number(analysisSnapshot?.trustScore))
+          ? Number(analysisSnapshot.trustScore)
+          : null,
+        trustLabel: normalizeText(analysisSnapshot?.trustLabel),
+        verdict: normalizeText(analysisSnapshot?.verdict),
+      },
       evidence,
     });
+
+    const reputationResult = await updateReporterReputation({
+      name,
+      email,
+      analysisSnapshot,
+    });
+
+    if (reputationResult) {
+      complaint.reputationDelta = reputationResult.reputationDelta;
+      await complaint.save();
+    }
 
     res.status(201).json({
       success: true,
@@ -220,6 +311,20 @@ async function submitComplaint(req, res, next) {
       impact,
       emotionalRisk: emotional.emotionalRisk,
       priority,
+      reputationProfile: reputationResult
+        ? {
+            id: reputationResult.profile._id,
+            name: reputationResult.profile.name,
+            email: reputationResult.profile.email,
+            reputationScore: reputationResult.profile.reputationScore,
+            badge: reputationResult.profile.badge,
+            totalComplaints: reputationResult.profile.totalComplaints,
+            correctComplaints: reputationResult.profile.correctComplaints,
+            incorrectComplaints: reputationResult.profile.incorrectComplaints,
+            complaintAligned: reputationResult.complaintAligned,
+            reputationDelta: reputationResult.reputationDelta,
+          }
+        : null,
     });
   } catch (error) {
     // Cleanup files if save fails.

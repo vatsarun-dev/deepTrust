@@ -1,6 +1,9 @@
 const fs = require("fs/promises");
 const { analyzeFakeNews } = require("../services/fakeNewsService");
 const { analyzeImage } = require("../services/imageDetectionService");
+const Complaint = require("../models/Complaint");
+const ReputationProfile = require("../models/ReputationProfile");
+const { isDatabaseReady } = require("../config/db");
 const {
   buildImpactScore,
   buildTruthBreakdown,
@@ -8,7 +11,117 @@ const {
   buildMultiAiVerification,
   buildExplanationModes,
   pickExplanationMode,
+  buildComplaintTrustScore,
+  buildFinalTrustScore,
+  buildTrustLabel,
+  buildExplainabilityReasons,
+  buildImpactPrediction,
+  buildReputationBadge,
+  clampScore,
 } = require("../services/intelligenceService");
+
+function normalizeText(value) {
+  return String(value || "").trim();
+}
+
+function tokenizeClaim(text) {
+  return Array.from(
+    new Set(
+      normalizeText(text)
+        .toLowerCase()
+        .replace(/[^a-z0-9\s]/g, " ")
+        .split(/\s+/)
+        .filter((word) => word.length >= 4)
+    )
+  ).slice(0, 8);
+}
+
+function countMatchingComplaints(claimText, complaints = []) {
+  const tokens = tokenizeClaim(claimText);
+  if (!tokens.length) return 0;
+
+  return complaints.filter((complaint) => {
+    const description = normalizeText(complaint?.description).toLowerCase();
+    const matches = tokens.filter((token) => description.includes(token)).length;
+    return matches >= Math.min(2, tokens.length);
+  }).length;
+}
+
+async function loadReporterProfile({ reporterName, reporterEmail }) {
+  if (!isDatabaseReady()) {
+    return null;
+  }
+
+  const normalizedName = normalizeText(reporterName).toLowerCase();
+  const email = normalizeText(reporterEmail).toLowerCase();
+
+  if (email) {
+    const byEmail = await ReputationProfile.findOne({ email }).lean().catch(() => null);
+    if (byEmail) return byEmail;
+  }
+
+  if (normalizedName) {
+    return ReputationProfile.findOne({ normalizedName }).lean().catch(() => null);
+  }
+
+  return null;
+}
+
+async function enrichTrustDecision(mergedResult, claimText, reporter) {
+  const textSources = Array.isArray(mergedResult?.sources)
+    ? mergedResult.sources
+    : Array.isArray(mergedResult?.sources?.text)
+      ? mergedResult.sources.text
+      : [];
+
+  const profile = await loadReporterProfile(reporter);
+
+  let complaintCount = 0;
+  if (isDatabaseReady()) {
+    const recentComplaints = await Complaint.find()
+      .sort({ createdAt: -1 })
+      .limit(40)
+      .lean()
+      .catch(() => []);
+    complaintCount = countMatchingComplaints(claimText, recentComplaints);
+  }
+
+  const aiScore = mergedResult?.multiLayerVerification?.finalConfidence ?? mergedResult?.confidence ?? 50;
+  const reputationScore = profile?.reputationScore ?? 50;
+  const complaintScore = buildComplaintTrustScore(complaintCount);
+  const trustScore = buildFinalTrustScore({
+    aiScore,
+    reputationScore,
+    complaintScore,
+  });
+  const trustLabel = buildTrustLabel(trustScore);
+  const reasons = buildExplainabilityReasons({
+    claim: `${claimText} ${mergedResult?.explanation || ""}`,
+    sourceCount: textSources.length,
+    complaintCount,
+    emotionalIntensity: mergedResult?.impact?.emotionalIntensity ?? 0,
+  });
+  const impactPrediction = buildImpactPrediction({
+    trustScore,
+    emotionalIntensity: mergedResult?.impact?.emotionalIntensity ?? 0,
+  });
+
+  return {
+    ...mergedResult,
+    trustScore,
+    trustLabel,
+    statusLabel: trustLabel,
+    reasons,
+    impactLevel: impactPrediction.impactLevel,
+    impactMessage: impactPrediction.impactMessage,
+    reporterReputation: {
+      reputationScore: clampScore(reputationScore, 50),
+      badge: buildReputationBadge(reputationScore),
+      complaintScore,
+      complaintCount,
+    },
+  };
+}
 
 function mergeResults(textResult, imageResult, explanationMode, claimText) {
   const availableResults = [textResult, imageResult].filter(Boolean);
@@ -120,8 +233,12 @@ async function analyzeContent(req, res, next) {
     ]);
 
     const mergedResult = mergeResults(textResult, imageResult, explanationMode, text);
+    const enrichedResult = await enrichTrustDecision(mergedResult, text, {
+      reporterName: req.body.reporterName,
+      reporterEmail: req.body.reporterEmail,
+    });
 
-    res.status(200).json(mergedResult);
+    res.status(200).json(enrichedResult);
   } catch (error) {
     next(error);
   } finally {

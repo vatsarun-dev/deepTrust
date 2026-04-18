@@ -15,10 +15,42 @@ const reputationProfileSchema = new mongoose.Schema(
       unique: true,
       index: true,
     },
+    email: {
+      type: String,
+      trim: true,
+      lowercase: true,
+      default: "",
+    },
     referenceImageName: {
       type: String,
       trim: true,
       default: "",
+    },
+    reputationScore: {
+      type: Number,
+      default: 50,
+      min: 0,
+      max: 100,
+    },
+    badge: {
+      type: String,
+      trim: true,
+      default: "Neutral",
+    },
+    totalComplaints: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+    correctComplaints: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+    incorrectComplaints: {
+      type: Number,
+      default: 0,
+      min: 0,
     },
     notes: {
       type: String,

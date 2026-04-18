@@ -27,33 +27,27 @@ function debugLog(message) {
 }
 
 function deriveStatus(aiScore) {
-  if (aiScore > 0.85) {
+  if (aiScore > 0.6) {
     return "AI Generated";
   }
-  if (aiScore > 0.6) {
-    return "Possibly AI Generated";
-  }
-  return "Likely Real";
+  return "Authenticated";
 }
 
 function statusToResult(status) {
-  if (status === "Likely Real") {
+  if (status === "Authenticated") {
     return "Real";
   }
-  if (status === "AI Generated" || status === "Possibly AI Generated") {
+  if (status === "AI Generated") {
     return "Fake";
   }
   return null;
 }
 
-function buildDefaultExplanation(status, confidence) {
+function buildDefaultExplanation(status) {
   if (status === "AI Generated") {
-    return `This image is likely AI-generated with ${confidence}% confidence based on synthetic pattern detection.`;
+    return "This image shows synthetic visual patterns that match common AI-generated image artifacts.";
   }
-  if (status === "Possibly AI Generated") {
-    return `This image shows some AI-like signals with ${confidence}% confidence, but evidence is not conclusive.`;
-  }
-  return `This image appears likely real with ${confidence}% confidence because strong synthetic indicators were not detected.`;
+  return "This image did not show strong synthetic indicators, so it appears to be an authenticated image.";
 }
 
 function normalizeCredential(value) {
@@ -249,19 +243,18 @@ async function analyzeImage(input, options = {}) {
   try {
     const aiScore = await callSightengine(file);
     const status = deriveStatus(aiScore);
-    const confidence = Math.round(aiScore * 100);
     const result = statusToResult(status);
 
     debugLog(
-      `[DEBUG][IMAGE] Hard decision from Sightengine -> ai_score=${aiScore}, status="${status}", confidence=${confidence}`
+      `[DEBUG][IMAGE] Hard decision from Sightengine -> ai_score=${aiScore}, status="${status}"`
     );
 
     return enrichImageResult({
       status,
       result,
-      confidence,
-      explanation: buildDefaultExplanation(status, confidence),
-      details: { ai_score: aiScore },
+      confidence: null,
+      explanation: buildDefaultExplanation(status),
+      details: {},
       source: "sightengine",
       sources: [],
     }, options);
@@ -270,11 +263,11 @@ async function analyzeImage(input, options = {}) {
     return enrichImageResult({
       status: "Analysis Unavailable",
       result: null,
-      confidence: 50,
+      confidence: null,
       explanation: error.message.includes("authentication failed")
         ? "Image verification is unavailable because Sightengine credentials are invalid. Update backend/.env and retry."
-        : "We could not complete AI-image scoring right now. Please retry and verify with additional sources.",
-      details: { ai_score: null },
+        : "We could not complete image verification right now. Please retry and verify with additional sources.",
+      details: {},
       source: "fallback",
       sources: [],
     }, options);
