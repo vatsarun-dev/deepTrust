@@ -22,6 +22,13 @@ function ReputationProtectorSection() {
   const { reputationReport, setReputationReport } = useAppContext();
   const { register, handleSubmit, reset } = useForm();
 
+  const badgeTone =
+    reputationReport?.badge === "Trusted User"
+      ? "#34d399"
+      : reputationReport?.badge === "Low Credibility"
+        ? "#f87171"
+        : "#fbbf24";
+
   useEffect(() => {
     const context = gsap.context(() => {
       gsap.fromTo(
@@ -134,6 +141,15 @@ function ReputationProtectorSection() {
                   {reputationReport.riskLevel} Risk
                 </h3>
                 <p className="text-sm leading-7 text-white/68">{reputationReport.summary}</p>
+                <div className="rounded-[1.5rem] border border-white/10 bg-black/20 p-5">
+                  <p className="text-xs uppercase tracking-[0.24em] text-white/42">Reputation Badge</p>
+                  <p className="mt-3 text-3xl font-semibold" style={{ color: badgeTone }}>
+                    {reputationReport.badge || "Neutral"}
+                  </p>
+                  <p className="mt-2 text-sm text-white/65">
+                    Score {reputationReport.reputationScore ?? 50}
+                  </p>
+                </div>
                 <div className="grid grid-cols-3 gap-3">
                   <div className="rounded-[1rem] border border-white/10 bg-black/20 p-4 text-center">
                     <p className="text-[10px] uppercase tracking-[0.24em] text-white/42">Name Match</p>
@@ -151,6 +167,26 @@ function ReputationProtectorSection() {
                     <p className="text-[10px] uppercase tracking-[0.24em] text-white/42">Emotional</p>
                     <p className="mt-2 text-lg font-semibold text-white">
                       {reputationReport.emotionalRisk}
+                    </p>
+                  </div>
+                </div>
+                <div className="grid grid-cols-3 gap-3">
+                  <div className="rounded-[1rem] border border-white/10 bg-black/20 p-4 text-center">
+                    <p className="text-[10px] uppercase tracking-[0.24em] text-white/42">Complaints</p>
+                    <p className="mt-2 text-lg font-semibold text-white">
+                      {reputationReport.totalComplaints ?? 0}
+                    </p>
+                  </div>
+                  <div className="rounded-[1rem] border border-white/10 bg-black/20 p-4 text-center">
+                    <p className="text-[10px] uppercase tracking-[0.24em] text-white/42">Correct</p>
+                    <p className="mt-2 text-lg font-semibold text-white">
+                      {reputationReport.correctComplaints ?? 0}
+                    </p>
+                  </div>
+                  <div className="rounded-[1rem] border border-white/10 bg-black/20 p-4 text-center">
+                    <p className="text-[10px] uppercase tracking-[0.24em] text-white/42">Incorrect</p>
+                    <p className="mt-2 text-lg font-semibold text-white">
+                      {reputationReport.incorrectComplaints ?? 0}
                     </p>
                   </div>
                 </div>

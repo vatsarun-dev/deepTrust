@@ -26,6 +26,18 @@ function TruthBreakdown({ breakdown }) {
           </div>
         ))}
       </div>
+      {breakdown.reasons?.length ? (
+        <div className="rounded-[1.25rem] border border-white/10 bg-black/20 p-4">
+          <p className="text-xs uppercase tracking-[0.24em] text-white/42">
+            Reasons
+          </p>
+          <div className="mt-2 space-y-2 text-sm leading-7 text-white/78">
+            {breakdown.reasons.map((reason) => (
+              <p key={reason}>• {reason}</p>
+            ))}
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

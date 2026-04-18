@@ -36,12 +36,11 @@ function extractTextSourceLinks(sources) {
 }
 
 function toVerdictLabel(status, result) {
+  if (status === "AI Generated") return "AI Generated Image";
+  if (status === "Authenticated") return "Authenticated Image";
   if (status === "Unverified") return "Unverified";
   if (result === "Fake" || status === "Fake" || status === "Misleading") {
     return "High manipulation risk";
-  }
-  if (status === "AI Generated" || status === "Possibly AI Generated") {
-    return "Synthetic media risk";
   }
   return "Likely authentic";
 }
@@ -49,11 +48,23 @@ function toVerdictLabel(status, result) {
 function getConfidenceColor(verdict) {
   const normalized = String(verdict || "").trim().toLowerCase();
 
-  if (normalized.includes("authentic") || normalized.includes("true")) return "#34d399";
+  if (normalized.includes("authenticated image") || normalized.includes("authentic") || normalized.includes("true")) {
+    return "#34d399";
+  }
+  if (normalized.includes("ai generated image") || normalized.includes("ai generated")) {
+    return "#f87171";
+  }
   if (normalized.includes("fake") || normalized.includes("manipulation") || normalized.includes("synthetic")) {
     return "#f87171";
   }
   return "#fcd34d";
+}
+
+function isImageOnlyResult(analysisResult) {
+  return Boolean(
+    analysisResult?.hasImage &&
+      (analysisResult?.status === "AI Generated" || analysisResult?.status === "Authenticated")
+  );
 }
 
 function buildEvidenceSummary(responseData, sourceLinks, hasText, hasImage) {
@@ -88,6 +99,7 @@ function CheckSection() {
     setDefenseKit,
     explanationMode,
     setExplanationMode,
+    user,
     setLoading,
   } = useAppContext();
   const {
@@ -135,6 +147,12 @@ function CheckSection() {
       if (hasText) {
         formData.append("text", data.text.trim());
       }
+      if (user?.name) {
+        formData.append("reporterName", user.name);
+      }
+      if (user?.email) {
+        formData.append("reporterEmail", user.email);
+      }
       if (hasImage) {
         formData.append("image", data.image[0]);
         setLastImageFile(data.image[0]);
@@ -159,25 +177,36 @@ function CheckSection() {
 
       const sourceLinks = extractTextSourceLinks(responseData.sources);
       const verdict = toVerdictLabel(responseData.status, responseData.result);
+      const isImageVerdict =
+        hasImage && (responseData.status === "AI Generated" || responseData.status === "Authenticated");
 
       setAnalysisResult({
         claimText: data.text?.trim() || "",
         status: responseData.status,
         result: responseData.result,
         verdict,
-        confidence:
-          responseData?.multiLayerVerification?.finalConfidence ?? Number(responseData.confidence || 50),
         summary: String(responseData.explanation || "").trim(),
         source: responseData.source,
-        sourceLinks,
-        sources: responseData.sources,
-        evidence: buildEvidenceSummary(responseData, sourceLinks, hasText, hasImage),
-        truthBreakdown: responseData.truthBreakdown,
-        impact: responseData.impact,
-        emotionalRisk: responseData.emotionalRisk,
-        emotionalSignals: responseData.emotionalSignals || [],
-        explanationModes: responseData.explanationModes || {},
-        multiLayerVerification: responseData.multiLayerVerification,
+        sourceLinks: isImageVerdict ? [] : sourceLinks,
+        sources: isImageVerdict ? null : responseData.sources,
+        evidence: isImageVerdict ? [] : buildEvidenceSummary(responseData, sourceLinks, hasText, hasImage),
+        truthBreakdown: isImageVerdict
+          ? null
+          : {
+              ...(responseData.truthBreakdown || {}),
+              reasons: responseData.reasons || [],
+            },
+        impact: isImageVerdict ? null : responseData.impact,
+        trustScore: isImageVerdict ? null : responseData.trustScore,
+        trustLabel: isImageVerdict ? null : responseData.trustLabel,
+        reasons: isImageVerdict ? [] : responseData.reasons || [],
+        impactLevel: isImageVerdict ? null : responseData.impactLevel,
+        impactMessage: isImageVerdict ? null : responseData.impactMessage,
+        reporterReputation: isImageVerdict ? null : responseData.reporterReputation,
+        emotionalRisk: isImageVerdict ? null : responseData.emotionalRisk,
+        emotionalSignals: isImageVerdict ? [] : responseData.emotionalSignals || [],
+        explanationModes: isImageVerdict ? {} : responseData.explanationModes || {},
+        multiLayerVerification: isImageVerdict ? null : responseData.multiLayerVerification,
         hasImage,
       });
 
@@ -231,7 +260,7 @@ function CheckSection() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          claim: analysisResult.claimText,
+          claim: analysisResult.claimText || analysisResult.verdict || "Suspicious image",
           explanation: analysisResult.summary,
           verdict: analysisResult.status || analysisResult.verdict,
           sourceLinks: analysisResult.sourceLinks,
@@ -333,59 +362,29 @@ function CheckSection() {
             </p>
             {analysisResult ? (
               <div className="space-y-5">
-                <div className="grid gap-4 md:grid-cols-[0.7fr_0.3fr]">
-                  <div>
-                    <p className="text-sm text-white/45">Verdict</p>
-                    <h3 className="text-2xl font-semibold uppercase text-white">
-                      {analysisResult.verdict}
-                    </h3>
-                    <p className="mt-3 text-sm leading-7 text-white/68">{analysisResult.summary}</p>
-                  </div>
-                  <div>
-                    <p className="text-sm text-white/45">Confidence</p>
-                    <p
-                      className="text-5xl font-semibold"
-                      style={{ color: getConfidenceColor(analysisResult.verdict) }}
-                    >
-                      {analysisResult.confidence}%
-                    </p>
-                  </div>
+                <div>
+                  <p className="text-sm text-white/45">Verdict</p>
+                  <h3
+                    className="text-3xl font-semibold uppercase"
+                    style={{ color: getConfidenceColor(analysisResult.verdict) }}
+                  >
+                    {analysisResult.verdict}
+                  </h3>
+                  <p className="mt-3 text-sm leading-7 text-white/68">{analysisResult.summary}</p>
                 </div>
 
-                <div className="grid gap-3 md:grid-cols-3">
-                  <div className="rounded-[1.25rem] border border-white/10 bg-black/20 p-4">
-                    <p className="text-xs uppercase tracking-[0.24em] text-white/42">Impact Score</p>
-                    <p className="mt-2 text-3xl font-semibold text-white">
-                      {analysisResult.impact?.impactScore ?? "--"}
-                    </p>
-                    <p className="mt-2 text-xs uppercase tracking-[0.22em] text-white/55">
-                      {analysisResult.impact?.riskLevel || "n/a"} Risk
-                    </p>
+                {!isImageOnlyResult(analysisResult) && analysisResult.reasons?.length ? (
+                  <div className="rounded-[1.5rem] border border-white/10 bg-black/20 p-5">
+                    <p className="text-sm uppercase tracking-[0.24em] text-white/45">Why This Result</p>
+                    <ul className="mt-3 space-y-2 text-sm leading-7 text-white/75">
+                      {analysisResult.reasons.map((reason) => (
+                        <li key={reason}>• {reason}</li>
+                      ))}
+                    </ul>
                   </div>
-                  <div className="rounded-[1.25rem] border border-white/10 bg-black/20 p-4">
-                    <p className="text-xs uppercase tracking-[0.24em] text-white/42">Emotional Damage</p>
-                    <p className="mt-2 text-3xl font-semibold text-white">
-                      {analysisResult.emotionalRisk || "Low"}
-                    </p>
-                    <p className="mt-2 text-xs text-white/55">
-                      {analysisResult.emotionalSignals?.length
-                        ? analysisResult.emotionalSignals.join(", ")
-                        : "No acute emotional harm signals."}
-                    </p>
-                  </div>
-                  <div className="rounded-[1.25rem] border border-white/10 bg-black/20 p-4">
-                    <p className="text-xs uppercase tracking-[0.24em] text-white/42">Verification Layer</p>
-                    <p className="mt-2 text-3xl font-semibold text-white">
-                      {analysisResult.multiLayerVerification?.finalConfidence ?? "--"}
-                    </p>
-                    <p className="mt-2 text-xs text-white/55">
-                      AI {analysisResult.multiLayerVerification?.aiConfidence ?? "--"} | Rules{" "}
-                      {analysisResult.multiLayerVerification?.ruleScore ?? "--"}
-                    </p>
-                  </div>
-                </div>
+                ) : null}
 
-                {analysisResult.source ? (
+                {!isImageOnlyResult(analysisResult) && analysisResult.source ? (
                   <div>
                     <p className="text-sm text-white/45">Primary Source</p>
                     <p className="text-sm uppercase tracking-[0.24em] text-white/72">
@@ -394,9 +393,11 @@ function CheckSection() {
                   </div>
                 ) : null}
 
-                <TruthBreakdown breakdown={analysisResult.truthBreakdown} />
+                {!isImageOnlyResult(analysisResult) ? (
+                  <TruthBreakdown breakdown={analysisResult.truthBreakdown} />
+                ) : null}
 
-                {analysisResult.sourceLinks?.length ? (
+                {!isImageOnlyResult(analysisResult) && analysisResult.sourceLinks?.length ? (
                   <div className="space-y-2">
                     <p className="text-sm uppercase tracking-[0.24em] text-white/45">Linked Evidence</p>
                     {analysisResult.sourceLinks.map((link) => (
@@ -413,6 +414,7 @@ function CheckSection() {
                   </div>
                 ) : null}
 
+                {!isImageOnlyResult(analysisResult) ? (
                 <div className="space-y-3">
                   {analysisResult.evidence.map((item) => (
                     <div
@@ -423,6 +425,7 @@ function CheckSection() {
                     </div>
                   ))}
                 </div>
+                ) : null}
 
                 <div className="flex flex-wrap gap-3">
                   <button type="button" className="dt-button" onClick={handleDefenseKit}>
@@ -476,8 +479,7 @@ function CheckSection() {
             ) : (
               <div className="flex h-full min-h-[300px] items-end rounded-[1.5rem] bg-[radial-gradient(circle_at_top,_rgba(255,59,59,0.22),_transparent_30%),linear-gradient(180deg,_rgba(255,255,255,0.02),_rgba(255,255,255,0.01))] p-5">
                 <p className="max-w-xs text-sm leading-7 text-white/55">
-                  Your analysis cockpit appears here with verdict, impact score, truth breakdown,
-                  defense kit, and reverse-trace outputs once verification finishes.
+                  Your analysis result appears here with a clear image verdict and explanation once verification finishes.
                 </p>
               </div>
             )}

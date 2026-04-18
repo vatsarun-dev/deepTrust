@@ -29,7 +29,14 @@ function ComplaintSection() {
   const [apiError, setApiError] = useState("");
   const [evidenceLinks, setEvidenceLinks] = useState([""]);
   const [generated, setGenerated] = useState(null);
-  const { complaintDraft, setComplaintDraft, lastComplaint, setLastComplaint } = useAppContext();
+  const {
+    complaintDraft,
+    setComplaintDraft,
+    lastComplaint,
+    setLastComplaint,
+    analysisResult,
+    setReputationReport,
+  } = useAppContext();
   const {
     register,
     watch,
@@ -176,6 +183,14 @@ function ComplaintSection() {
       formData.append("issueType", getValues("issueType"));
       formData.append("platform", getValues("platform"));
       formData.append("description", getValues("description"));
+      formData.append(
+        "analysisSnapshot",
+        JSON.stringify({
+          trustScore: analysisResult?.trustScore,
+          trustLabel: analysisResult?.trustLabel,
+          verdict: analysisResult?.status || analysisResult?.verdict,
+        })
+      );
 
       Array.from(evidenceFiles || []).forEach((file) => {
         formData.append("evidenceFiles", file);
@@ -214,7 +229,11 @@ function ComplaintSection() {
         ...(prev || {}),
         recommendedActions: responseData.recommendedActions || prev?.recommendedActions || [],
         aiComplaint: responseData.aiComplaint || prev?.aiComplaint,
+        reputationProfile: responseData.reputationProfile || prev?.reputationProfile || null,
       }));
+      if (responseData.reputationProfile) {
+        setReputationReport(responseData.reputationProfile);
+      }
       setStep(5);
     } catch (error) {
       setApiError(error.message || "Unable to submit complaint right now.");
@@ -414,6 +433,21 @@ function ComplaintSection() {
               <p className="text-sm text-white/55">
                 Complaint submitted for {watchedPlatform}. You can now proceed with reporting actions.
               </p>
+              {generated?.reputationProfile ? (
+                <div className="rounded-[1rem] border border-white/10 bg-black/20 p-4">
+                  <p className="text-xs uppercase tracking-[0.22em] text-white/45">Reputation Update</p>
+                  <p className="mt-2 text-lg font-semibold text-white">
+                    {generated.reputationProfile.badge} • {generated.reputationProfile.reputationScore}
+                  </p>
+                  <p className="mt-2 text-sm text-white/65">
+                    {generated.reputationProfile.complaintAligned === true
+                      ? `Complaint matched the verification result. Score +${generated.reputationProfile.reputationDelta}.`
+                      : generated.reputationProfile.complaintAligned === false
+                        ? `Complaint did not match the verification result. Score ${generated.reputationProfile.reputationDelta}.`
+                        : "Complaint saved without a linked trust decision."}
+                  </p>
+                </div>
+              ) : null}
             </div>
           ) : null}
 
