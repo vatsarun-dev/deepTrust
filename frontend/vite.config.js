@@ -4,7 +4,7 @@ import tailwindcss from "@tailwindcss/vite";
 
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), "");
-  const backendTarget = env.VITE_API_URL || "https://deeptrust-2.onrender.com";
+  const backendTarget = env.VITE_API_URL || "https://deeptrust-3.onrender.com";
 
   return {
     plugins: [react(), tailwindcss()],
