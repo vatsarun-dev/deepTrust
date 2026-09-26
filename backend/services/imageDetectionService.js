@@ -1,115 +1,51 @@
 const axios = require("axios");
 const FormData = require("form-data");
-const dotenv = require("dotenv");
 const fs = require("fs/promises");
 const path = require("path");
-const {
-  buildImpactScore,
-  buildTruthBreakdown,
-  buildEmotionalRisk,
-  buildMultiAiVerification,
-  buildExplanationModes,
-  pickExplanationMode,
-} = require("./intelligenceService");
 
 const SIGHTENGINE_API_URL = "https://api.sightengine.com/1.0/check.json";
-let cachedFallbackCreds = null;
-let attemptedFallbackLoad = false;
 
-function isDebugEnabled() {
-  return process.env.DEBUG_ANALYSIS === "true";
+function statusFromScore(score) {
+  if (score >= 0.85) return "AI_GENERATED";
+  if (score >= 0.6) return "LIKELY_AI_GENERATED";
+  if (score >= 0.4) return "POSSIBLY_AI_GENERATED";
+  return "LIKELY_AUTHENTIC";
 }
 
-function debugLog(message) {
-  if (isDebugEnabled()) {
-    console.log(message);
+function explanationFor(status, confidence) {
+  if (status === "AI_GENERATED" || status === "LIKELY_AI_GENERATED") {
+    return `The synthetic-media provider returned an AI-generation score of ${confidence}%. This score concerns the media only, not whether an accompanying claim is true.`;
   }
+  if (status === "POSSIBLY_AI_GENERATED") {
+    return `The synthetic-media provider returned a mixed AI-generation score of ${confidence}%. The result is inconclusive and does not establish the truth of an accompanying claim.`;
+  }
+  return `The provider did not report strong AI-generation signals (${confidence}%). This is not proof that the media is authentic or that an accompanying claim is true.`;
 }
 
-function deriveStatus(aiScore) {
-  if (aiScore > 0.85) {
-    return "AI Generated";
-  }
-  if (aiScore > 0.6) {
-    return "Possibly AI Generated";
-  }
-  return "Likely Real";
-}
-
-function statusToResult(status) {
-  if (status === "Likely Real") {
-    return "Real";
-  }
-  if (status === "AI Generated" || status === "Possibly AI Generated") {
-    return "Fake";
-  }
-  return null;
-}
-
-function buildDefaultExplanation(status, confidence) {
-  if (status === "AI Generated") {
-    return `This image is likely AI-generated with ${confidence}% confidence based on synthetic pattern detection.`;
-  }
-  if (status === "Possibly AI Generated") {
-    return `This image shows some AI-like signals with ${confidence}% confidence, but evidence is not conclusive.`;
-  }
-  return `This image appears likely real with ${confidence}% confidence because strong synthetic indicators were not detected.`;
-}
-
-function normalizeCredential(value) {
-  return String(value || "")
-    .trim()
-    .replace(/^['"]+|['"]+$/g, "");
-}
-
-function isUsableCredential(value) {
-  const normalized = normalizeCredential(value);
-  if (!normalized) return false;
-  return !/^your_/i.test(normalized);
-}
-
-function areSameCredentials(a, b) {
-  return (
-    normalizeCredential(a?.apiUser) === normalizeCredential(b?.apiUser) &&
-    normalizeCredential(a?.apiSecret) === normalizeCredential(b?.apiSecret)
-  );
-}
-
-async function loadFallbackCredentialsFromExample() {
-  if (attemptedFallbackLoad) {
-    return cachedFallbackCreds;
-  }
-  attemptedFallbackLoad = true;
-
-  try {
-    const envExamplePath = path.join(__dirname, "..", ".env.example");
-    const raw = await fs.readFile(envExamplePath, "utf8");
-    const parsed = dotenv.parse(raw);
-
-    const creds = {
-      apiUser: normalizeCredential(parsed.SIGHTENGINE_API_USER),
-      apiSecret: normalizeCredential(parsed.SIGHTENGINE_API_SECRET),
+async function normalizeImageInput(input) {
+  if (!input) return null;
+  if (input.buffer && Buffer.isBuffer(input.buffer)) return input;
+  if (input.path) {
+    return {
+      buffer: await fs.readFile(input.path),
+      originalname: input.originalname || path.basename(input.path),
+      mimetype: input.mimetype || "image/jpeg",
     };
-
-    if (isUsableCredential(creds.apiUser) && isUsableCredential(creds.apiSecret)) {
-      cachedFallbackCreds = creds;
-      return cachedFallbackCreds;
-    }
-  } catch (error) {
-    debugLog(`[DEBUG][SIGHTENGINE] Could not load fallback creds from .env.example: ${error.message}`);
   }
-
-  cachedFallbackCreds = null;
+  if (typeof input === "string") {
+    return {
+      buffer: await fs.readFile(input),
+      originalname: path.basename(input),
+      mimetype: "image/jpeg",
+    };
+  }
   return null;
 }
 
-async function requestSightengine(file, creds) {
-  const apiUser = normalizeCredential(creds?.apiUser);
-  const apiSecret = normalizeCredential(creds?.apiSecret);
-
-  if (!apiUser || !apiSecret) {
-    throw new Error("Sightengine credentials are missing");
-  }
+async function callSightengine(file) {
+  const apiUser = String(process.env.SIGHTENGINE_API_USER || "").trim();
+  const apiSecret = String(process.env.SIGHTENGINE_API_SECRET || "").trim();
+  if (!apiUser || !apiSecret) throw new Error("Sightengine credentials are not configured.");
 
   const form = new FormData();
   form.append("models", "genai");
@@ -119,168 +55,57 @@ async function requestSightengine(file, creds) {
     filename: file.originalname || "upload.jpg",
     contentType: file.mimetype || "application/octet-stream",
   });
-
   const response = await axios.post(SIGHTENGINE_API_URL, form, {
     headers: form.getHeaders(),
     timeout: 15000,
-    maxContentLength: 8 * 1024 * 1024,
-    maxBodyLength: 8 * 1024 * 1024,
+    maxContentLength: 10 * 1024 * 1024,
+    maxBodyLength: 10 * 1024 * 1024,
   });
-
-  const aiScore = Number(response?.data?.type?.ai_generated);
-  if (!Number.isFinite(aiScore)) {
-    throw new Error("Sightengine did not return ai_generated score");
-  }
-
-  debugLog(`[DEBUG][SIGHTENGINE] Raw ai_generated score: ${aiScore}`);
-  return Math.max(0, Math.min(1, aiScore));
+  const score = Number(response?.data?.type?.ai_generated);
+  if (!Number.isFinite(score)) throw new Error("Sightengine did not return an AI-generation score.");
+  return Math.max(0, Math.min(1, score));
 }
 
-async function callSightengine(file) {
-  const primaryCreds = {
-    apiUser: process.env.SIGHTENGINE_API_USER,
-    apiSecret: process.env.SIGHTENGINE_API_SECRET,
-  };
-
-  try {
-    return await requestSightengine(file, primaryCreds);
-  } catch (error) {
-    const status = error?.response?.status;
-
-    if (status === 401) {
-      const fallbackCreds = await loadFallbackCredentialsFromExample();
-      if (fallbackCreds && !areSameCredentials(primaryCreds, fallbackCreds)) {
-        try {
-          console.warn(
-            "Sightengine auth failed with .env credentials. Retrying with backend/.env.example credentials."
-          );
-          return await requestSightengine(file, fallbackCreds);
-        } catch (fallbackError) {
-          const fallbackStatus = fallbackError?.response?.status;
-          if (fallbackStatus === 401) {
-            throw new Error(
-              "Sightengine authentication failed (401). Check SIGHTENGINE_API_USER and SIGHTENGINE_API_SECRET in backend/.env (and backend/.env.example fallback)."
-            );
-          }
-          if (fallbackStatus) {
-            throw new Error(`Sightengine request failed with status ${fallbackStatus}`);
-          }
-          throw new Error(`Sightengine request failed: ${fallbackError.message}`);
-        }
-      }
-
-      throw new Error(
-        "Sightengine authentication failed (401). Check SIGHTENGINE_API_USER and SIGHTENGINE_API_SECRET in backend/.env."
-      );
-    }
-
-    if (status) {
-      throw new Error(`Sightengine request failed with status ${status}`);
-    }
-
-    throw new Error(`Sightengine request failed: ${error.message}`);
-  }
-}
-
-async function normalizeImageInput(input) {
-  if (!input) {
-    return null;
-  }
-
-  if (input.buffer && Buffer.isBuffer(input.buffer)) {
-    return input;
-  }
-
-  if (typeof input === "string") {
-    const filePath = input;
-    const buffer = await fs.readFile(filePath);
-    const ext = path.extname(filePath).toLowerCase();
-    const mimetype = ext === ".png" ? "image/png" : "image/jpeg";
-    return {
-      buffer,
-      originalname: path.basename(filePath),
-      mimetype,
-    };
-  }
-
-  return null;
-}
-
-function enrichImageResult(result, options = {}) {
-  if (!result) return null;
-
-  const contextText = String(options.contextText || "uploaded image");
-  const impact = buildImpactScore(contextText);
-  const emotional = buildEmotionalRisk(contextText);
-  const truthBreakdown = buildTruthBreakdown({
-    claim: contextText,
-    status: result.status,
-    explanation: result.explanation,
-    sources: [],
-  });
-  const explanationModes = buildExplanationModes({
-    claim: contextText,
-    explanation: result.explanation,
-    truthBreakdown,
-    impact,
-    emotionalRisk: emotional,
-  });
-  const multiLayerVerification = buildMultiAiVerification({
-    imageResult: result,
-    sourceMatch: "weak",
-  });
-
-  return {
-    ...result,
-    explanation: pickExplanationMode(explanationModes, options.mode),
-    explanationModes,
-    truthBreakdown,
-    impact,
-    emotionalRisk: emotional.emotionalRisk,
-    emotionalSignals: emotional.categories,
-    multiLayerVerification,
-  };
-}
-
-async function analyzeImage(input, options = {}) {
+async function analyzeImage(input) {
   const file = await normalizeImageInput(input);
-  if (!file || !file.buffer) return null;
+  if (!file?.buffer) return null;
 
   try {
-    const aiScore = await callSightengine(file);
-    const status = deriveStatus(aiScore);
-    const confidence = Math.round(aiScore * 100);
-    const result = statusToResult(status);
-
-    debugLog(
-      `[DEBUG][IMAGE] Hard decision from Sightengine -> ai_score=${aiScore}, status="${status}", confidence=${confidence}`
-    );
-
-    return enrichImageResult({
-      status,
-      result,
-      confidence,
-      explanation: buildDefaultExplanation(status, confidence),
-      details: { ai_score: aiScore },
-      source: "sightengine",
-      sources: [],
-    }, options);
+    const probability = await callSightengine(file);
+    const confidence = Math.round(probability * 100);
+    const status = statusFromScore(probability);
+    return {
+      mediaType: "image",
+      syntheticMedia: {
+        status,
+        probability,
+        confidence,
+        isAiGenerated: status === "AI_GENERATED" || status === "LIKELY_AI_GENERATED",
+        provider: "sightengine",
+        providerResults: [{ provider: "sightengine", aiGeneratedScore: probability }],
+        signals: [],
+      },
+      explanation: explanationFor(status, confidence),
+    };
   } catch (error) {
-    console.warn(`Sightengine failed, returning safe fallback: ${error.message}`);
-    return enrichImageResult({
-      status: "Analysis Unavailable",
-      result: null,
-      confidence: 50,
-      explanation: error.message.includes("authentication failed")
-        ? "Image verification is unavailable because Sightengine credentials are invalid. Update backend/.env and retry."
-        : "We could not complete AI-image scoring right now. Please retry and verify with additional sources.",
-      details: { ai_score: null },
-      source: "fallback",
-      sources: [],
-    }, options);
+    console.warn(`Image forensics unavailable: ${error.message}`);
+    return {
+      mediaType: "image",
+      syntheticMedia: {
+        status: "ANALYSIS_UNAVAILABLE",
+        probability: null,
+        confidence: null,
+        isAiGenerated: null,
+        provider: "sightengine",
+        providerResults: [],
+        signals: [],
+      },
+      explanation: "AI-media analysis could not be completed. This does not indicate that the image is synthetic or authentic.",
+    };
   }
 }
 
 module.exports = {
   analyzeImage,
+  statusFromScore,
 };

@@ -1,140 +1,171 @@
 const fs = require("fs/promises");
-const { analyzeFakeNews } = require("../services/fakeNewsService");
+const { runGeneralAgent } = require("../services/agent/generalAgentService");
 const { analyzeImage } = require("../services/imageDetectionService");
-const {
-  buildImpactScore,
-  buildTruthBreakdown,
-  buildEmotionalRisk,
-  buildMultiAiVerification,
-  buildExplanationModes,
-  pickExplanationMode,
-} = require("../services/intelligenceService");
+const { analyzeVideo } = require("../services/videoAnalysisService");
+const { validateUploadedMedia, uploadToImageKit } = require("../services/mediaStorageService");
+const { isDatabaseReady } = require("../config/db");
+const Verification = require("../models/Verification");
 
-function mergeResults(textResult, imageResult, explanationMode, claimText) {
-  const availableResults = [textResult, imageResult].filter(Boolean);
+function clean(value) {
+  return String(value || "").trim();
+}
 
-  if (!availableResults.length) {
-    return {
-      status: "Analysis Unavailable",
-      result: null,
-      confidence: 50,
-      explanation: "No valid analysis result could be produced. Please retry.",
-      source_match: null,
-      sources: [],
-      source: "fallback",
-    };
-  }
-
-  if (availableResults.length === 1) {
-    const single = availableResults[0];
-    const isArraySources = Array.isArray(single.sources);
-    const defaultSources =
-      single.source === "sightengine"
-        ? { text: "n/a", image: "sightengine" }
-        : { text: single.source || "fallback", image: "n/a" };
-
-    return {
-      status: single.status || single.result,
-      result: single.result || null,
-      confidence: single.confidence,
-      explanation: single.explanation,
-      source_match: single.source_match || null,
-      sources: isArraySources
-        ? single.sources
-        :
-        single.sources && typeof single.sources === "object" && !Array.isArray(single.sources)
-          ? single.sources
-          : defaultSources,
-      source: single.source,
-      truthBreakdown: single.truthBreakdown,
-      impact: single.impact,
-      emotionalRisk: single.emotionalRisk,
-      emotionalSignals: single.emotionalSignals,
-      explanationModes: single.explanationModes,
-      multiLayerVerification: single.multiLayerVerification,
-    };
-  }
-
-  const fakeVotes = availableResults.filter((item) => item.result === "Fake");
-  const averageConfidence = Math.round(
-    availableResults.reduce((sum, item) => sum + item.confidence, 0) / availableResults.length
-  );
-  const impact = buildImpactScore(claimText);
-  const emotional = buildEmotionalRisk(
-    `${claimText || ""} ${textResult?.explanation || ""} ${imageResult?.explanation || ""}`
-  );
-  const truthBreakdown = buildTruthBreakdown({
-    claim: claimText,
-    status: fakeVotes.length > 0 ? "Misleading" : "Likely True",
-    explanation: `${textResult?.explanation || ""} ${imageResult?.explanation || ""}`.trim(),
-    sources: textResult?.sources || [],
-  });
-  const explanationModes = buildExplanationModes({
-    claim: claimText,
-    explanation: `${textResult?.explanation || ""} ${imageResult?.explanation || ""}`.trim(),
-    truthBreakdown,
-    impact,
-    emotionalRisk: emotional,
-  });
-  const multiLayerVerification = buildMultiAiVerification({
-    textResult,
-    imageResult,
-    sourceMatch: textResult?.source_match,
-  });
-
+function unverifiedWithoutClaim() {
   return {
-    status: fakeVotes.length > 0 ? "Misleading" : "Likely True",
-    result: fakeVotes.length > 0 ? "Fake" : "Real",
-    confidence: multiLayerVerification.finalConfidence || averageConfidence,
-    explanation: pickExplanationMode(explanationModes, explanationMode),
-    source_match: textResult ? textResult.source_match || null : null,
-    sources: {
-      text: textResult ? textResult.sources || [] : [],
-      image: imageResult ? imageResult.source : null,
+    claim: "",
+    claimType: "not_provided",
+    verdict: "NOT_APPLICABLE",
+    confidence: null,
+    confidenceMethod: "No text claim was submitted.",
+    summary: "No claim was submitted, so only media authenticity was analyzed.",
+    claimBreakdown: [],
+    supportingEvidence: [],
+    contradictingEvidence: [],
+    evidence: [],
+    uncertainties: [],
+    explanation: {
+      simple: "No claim was submitted, so only media authenticity was analyzed.",
+      technical: "Claim verification was not run because the request did not include text.",
     },
-    source: "multi-layer",
-    truthBreakdown,
-    impact,
-    emotionalRisk: emotional.emotionalRisk,
-    emotionalSignals: emotional.categories,
-    explanationModes,
-    multiLayerVerification,
+    recommendedNextSteps: ["Add the accompanying caption or claim to evaluate whether this media supports it."],
   };
 }
 
+function selectExplanation(claimVerification, mode) {
+  const normalized = clean(mode).toLowerCase();
+  if (normalized === "technical") return claimVerification.explanation?.technical || claimVerification.summary;
+  if (normalized === "advice" || normalized === "legal") {
+    return claimVerification.recommendedNextSteps?.join(" ") || claimVerification.summary;
+  }
+  return claimVerification.explanation?.simple || claimVerification.summary;
+}
+
+function consistencyFor(claimText, claimVerification, mediaVerification) {
+  if (!claimText || !mediaVerification) {
+    return { status: "NOT_APPLICABLE", relationship: "NOT_APPLICABLE", reason: "A claim and media are both required for a consistency assessment." };
+  }
+  const status = mediaVerification.syntheticMedia?.status;
+  if (["AI_GENERATED", "LIKELY_AI_GENERATED", "POSSIBLY_AI_GENERATED"].includes(status)) {
+    return {
+      status: "UNCERTAIN",
+      relationship: "MEDIA_SHOULD_NOT_BE_USED_AS_EVIDENCE",
+      reason: "The media has synthetic-generation signals, so it should not be used as proof of the accompanying claim. Claim verification remains independent.",
+    };
+  }
+  if (claimVerification.verdict === "UNVERIFIED") {
+    return {
+      status: "UNCERTAIN",
+      relationship: "INSUFFICIENT_CONTEXT",
+      reason: "The claim remains unverified, and media authenticity alone cannot establish the event or context described.",
+    };
+  }
+  return {
+    status: "UNCERTAIN",
+    relationship: "AUTHENTICITY_DOES_NOT_ESTABLISH_CONTEXT",
+    reason: "The available media-forensics result assesses synthetic-generation signals, not whether the media depicts the specific event in the claim.",
+  };
+}
+
+async function saveVerification(record) {
+  if (!isDatabaseReady()) {
+    console.warn("[DB] Verification history skipped: database unavailable.");
+    return { saved: false, reason: "database_unavailable" };
+  }
+  try {
+    await Verification.create(record);
+    console.log("[DB] Verification history saved.");
+    return { saved: true, reason: null };
+  } catch (error) {
+    console.warn(`[DB] Verification history save failed: ${error.message}`);
+    return { saved: false, reason: "write_failed" };
+  }
+}
+
 async function analyzeContent(req, res, next) {
-  let uploadedFilePath = null;
+  const uploadedFile = req.files?.media?.[0] || req.files?.image?.[0] || null;
+  const text = clean(req.body?.text);
 
   try {
-    const { text, explanationMode } = req.body;
-    uploadedFilePath = req.file ? req.file.path : null;
-
-    if ((!text || !String(text).trim()) && !uploadedFilePath) {
+    if (!text && !uploadedFile) {
       res.status(400);
-      throw new Error("Provide text, an image upload, or both for analysis.");
+      throw new Error("Provide text, an image, a video, or text with media for analysis.");
     }
 
-    const [textResult, imageResult] = await Promise.all([
-      analyzeFakeNews(text, { mode: explanationMode }),
-      analyzeImage(uploadedFilePath, { mode: explanationMode, contextText: text }),
+    let mediaInfo = null;
+    if (uploadedFile) mediaInfo = await validateUploadedMedia(uploadedFile);
+
+    const [claimVerification, mediaAnalysis, storedMedia] = await Promise.all([
+      text
+        ? runGeneralAgent(text, { hasMedia: Boolean(uploadedFile), mediaType: mediaInfo?.kind || null })
+        : Promise.resolve(unverifiedWithoutClaim()),
+      uploadedFile
+        ? mediaInfo.kind === "video"
+          ? analyzeVideo(uploadedFile)
+          : analyzeImage(uploadedFile)
+        : Promise.resolve(null),
+      uploadedFile ? uploadToImageKit(uploadedFile, mediaInfo.kind) : Promise.resolve(null),
     ]);
 
-    const mergedResult = mergeResults(textResult, imageResult, explanationMode, text);
+    const mediaVerification = mediaAnalysis
+      ? {
+        ...mediaAnalysis,
+        type: mediaInfo.kind,
+        url: storedMedia?.url || null,
+        storage: storedMedia?.storage || "not_configured",
+        uploadError: storedMedia?.uploadError || null,
+      }
+      : null;
+    const claimMediaConsistency = consistencyFor(text, claimVerification, mediaVerification);
+    const explanationMode = clean(req.body?.explanationMode).toLowerCase() || "simple";
+    const isDegraded = claimVerification.mode === "unavailable";
+    const response = {
+      status: isDegraded ? "degraded" : "success",
+      aiAvailable: !isDegraded,
+      code: isDegraded ? (claimVerification.limitations?.[0] || "GEMINI_UNAVAILABLE") : null,
+      retryable: isDegraded,
+      query: claimVerification.query || text,
+      intent: claimVerification.intent || "not_provided",
+      answer: claimVerification.answer || claimVerification.summary,
+      claimVerification,
+      mediaVerification,
+      claimMediaConsistency,
+      evidence: claimVerification.evidence || [],
+      toolsUsed: claimVerification.toolsUsed || [],
+      ragUsed: Boolean(claimVerification.ragUsed),
+      limitations: claimVerification.limitations || [],
+      explanation: {
+        mode: explanationMode,
+        text: selectExplanation(claimVerification, explanationMode),
+      },
+      nextSteps: claimVerification.recommendedNextSteps || [],
+      // Compatibility fields for older consumers of this endpoint.
+      verdictStatus: claimVerification.verdict,
+      confidence: claimVerification.confidence,
+      explanationText: selectExplanation(claimVerification, explanationMode),
+      sources: claimVerification.evidence || [],
+      source: "gemini-agent",
+    };
 
-    res.status(200).json(mergedResult);
+    const persistence = await saveVerification({
+      user: req.user?._id,
+      claim: text,
+      claimVerification,
+      media: storedMedia ? { type: mediaInfo.kind, ...storedMedia } : null,
+      mediaVerification,
+      claimMediaConsistency,
+      evidence: claimVerification.evidence || [],
+      explanation: response.explanation,
+    });
+    response.persistence = persistence;
+    res.status(200).json(response);
   } catch (error) {
     next(error);
   } finally {
-    if (uploadedFilePath) {
-      try {
-        await fs.unlink(uploadedFilePath);
-      } catch (cleanupError) {
-        console.warn(`Unable to remove uploaded file: ${cleanupError.message}`);
-      }
-    }
+    if (uploadedFile?.path) await fs.unlink(uploadedFile.path).catch(() => null);
   }
 }
 
 module.exports = {
   analyzeContent,
+  consistencyFor,
 };

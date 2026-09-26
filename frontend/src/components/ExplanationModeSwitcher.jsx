@@ -1,4 +1,4 @@
-const MODES = ["simple", "technical", "legal"];
+const MODES = ["simple", "technical", "advice"];
 
 function ExplanationModeSwitcher({ value, onChange }) {
   return (

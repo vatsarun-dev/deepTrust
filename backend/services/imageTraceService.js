@@ -1,57 +1,32 @@
 const { buildImpactScore } = require("../utils/impactScore");
+const { webSearchTool } = require("./webSearchService");
 
 function normalizeText(value) {
   return String(value || "").trim();
 }
 
-function inferKeywords(file, hint = "") {
-  const baseName = normalizeText(file?.originalname || hint || "uploaded image")
-    .replace(/\.[a-z0-9]+$/i, "")
-    .replace(/[-_]+/g, " ");
+function inferKeywords(hint = "") {
+  const context = normalizeText(hint);
+  if (!context) return [];
 
   const words = Array.from(
     new Set(
-      baseName
+      context
         .toLowerCase()
         .split(/\s+/)
         .filter((word) => word.length > 2)
     )
   );
 
-  const fallback = ["viral", "image", "claim"];
-  return (words.length ? words : fallback).slice(0, 6);
-}
-
-async function searchDuckDuckGo(keywords) {
-  const query = encodeURIComponent(keywords.join(" "));
-
-  try {
-    const response = await fetch(`https://duckduckgo.com/html/?q=${query}`, {
-      method: "GET",
-      headers: {
-        "User-Agent": "DeepTrust/1.0",
-      },
-    });
-
-    if (!response.ok) {
-      return [];
-    }
-
-    const html = await response.text();
-    const matches = [...html.matchAll(/result__a[^>]*href="([^"]+)"[^>]*>(.*?)<\/a>/gi)];
-
-    return matches.slice(0, 5).map((match) => ({
-      title: String(match[2] || "").replace(/<[^>]+>/g, "").trim(),
-      url: String(match[1] || "").trim(),
-    }));
-  } catch {
-    return [];
-  }
+  return words.slice(0, 6);
 }
 
 async function traceImage(file, hint) {
-  const keywords = inferKeywords(file, hint);
-  const results = await searchDuckDuckGo(keywords);
+  const keywords = inferKeywords(hint);
+  const search = keywords.length
+    ? await webSearchTool(keywords.join(" "), { limit: 5, fetchContent: false })
+    : { results: [] };
+  const results = search.results.map((item) => ({ title: item.title, url: item.url }));
   const impact = buildImpactScore(`${hint || ""} ${keywords.join(" ")}`);
 
   return {
@@ -59,9 +34,11 @@ async function traceImage(file, hint) {
     similarResults: results,
     searchQuery: keywords.join(" "),
     impactScore: impact.impactScore,
-    note: results.length
-      ? "Potentially similar web results were found for manual reverse-trace review."
-      : "No search matches were returned; use the extracted keywords for manual investigation.",
+    note: keywords.length
+      ? results.length
+        ? "These are related web-search results for the supplied claim context, not a reverse-image match."
+        : "No related web-search matches were returned for the supplied claim context."
+      : "Add a claim or caption to run a related web search. This tool does not perform reverse-image search.",
   };
 }
 

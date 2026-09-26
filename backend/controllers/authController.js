@@ -45,7 +45,7 @@ function ensureDatabaseConnection(res) {
   if (!isDatabaseReady()) {
     res.status(503);
     throw new Error(
-      "Database is not connected. Check Atlas network access or MONGO_URI, then try again."
+      "Database is not connected. Check Atlas network access or MONGODB_URI, then try again."
     );
   }
 }

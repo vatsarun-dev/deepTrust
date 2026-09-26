@@ -1,3 +1,5 @@
+const dns = require("dns");
+dns.setDefaultResultOrder("ipv4first");
 const express = require("express");
 const cors = require("cors");
 const dotenv = require("dotenv");
@@ -46,6 +48,10 @@ app.use("/api", intelligenceRoutes);
 app.use(notFound);
 app.use(errorHandler);
 
-app.listen(PORT, () => {
-  console.log(`DeepTrust backend listening on port ${PORT}`);
-});
+if (require.main === module) {
+  app.listen(PORT, () => {
+    console.log(`DeepTrust backend listening on port ${PORT}`);
+  });
+}
+
+module.exports = app;

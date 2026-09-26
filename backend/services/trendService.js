@@ -1,14 +1,5 @@
 const Complaint = require("../models/Complaint");
-const { fetchRelevantNews } = require("./gnewsService");
 const { buildImpactScore } = require("../utils/impactScore");
-
-const TREND_QUERIES = [
-  "fake election claim",
-  "viral AI image hoax",
-  "health misinformation",
-  "celebrity deepfake rumor",
-  "financial scam misinformation",
-];
 
 function tokenize(text) {
   return String(text || "")
@@ -24,32 +15,10 @@ function titleToPattern(title) {
 }
 
 async function fetchTrendingFakes() {
-  const [newsResults, complaintResultsRaw] = await Promise.all([
-    Promise.all(TREND_QUERIES.map((query) => fetchRelevantNews(query).catch(() => []))),
-    Complaint.find().sort({ createdAt: -1 }).limit(12).lean().catch(() => []),
-  ]);
+  const complaintResultsRaw = await Complaint.find().sort({ createdAt: -1 }).limit(12).lean().catch(() => []);
   const complaintResults = Array.isArray(complaintResultsRaw) ? complaintResultsRaw : [];
 
   const grouped = new Map();
-
-  newsResults.flat().forEach((article) => {
-    const pattern = titleToPattern(article.title) || "unknown signal";
-    const existing = grouped.get(pattern) || {
-      pattern,
-      topic: pattern,
-      mentions: 0,
-      sources: [],
-      examples: [],
-    };
-    existing.mentions += 1;
-    if (article.url && !existing.sources.find((item) => item.url === article.url)) {
-      existing.sources.push({ title: article.title, url: article.url });
-    }
-    if (article.title) {
-      existing.examples.push(article.title);
-    }
-    grouped.set(pattern, existing);
-  });
 
   complaintResults.forEach((complaint) => {
     const pattern = titleToPattern(complaint.description) || complaint.complaintType || "complaint signal";
